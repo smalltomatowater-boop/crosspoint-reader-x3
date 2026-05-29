@@ -7,6 +7,7 @@
 #include <NimBLEScan.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/task.h>
 
 #include <functional>
 #include <string>
@@ -20,7 +21,7 @@ class BleKeyboard : public NimBLEClientCallbacks, public NimBLEScanCallbacks {
 
   void begin(KeyCallback cb);
   void stop();
-  void loop();  // call from main task; dispatches queued keypresses
+  void loop();  // main task: dispatch queued keys only (non-blocking)
 
   bool isConnected() const { return connected_; }
   bool isScanning() const { return scanning_; }
@@ -37,16 +38,20 @@ class BleKeyboard : public NimBLEClientCallbacks, public NimBLEScanCallbacks {
   KeyCallback callback_;
   NimBLEClient* client_ = nullptr;
   NimBLEAdvertisedDevice* device_ = nullptr;
-  QueueHandle_t keyQueue_ = nullptr;  // thread-safe key pipe to main task
-  bool connected_ = false;
-  bool scanning_ = false;
-  bool connectPending_ = false;
-  bool ready_ = false;  // true after subscription complete
+  QueueHandle_t keyQueue_ = nullptr;
+  TaskHandle_t bleTask_ = nullptr;
+  volatile bool stopRequested_ = false;
+  volatile bool connected_ = false;
+  volatile bool scanning_ = false;
+  volatile bool connectPending_ = false;
+  volatile bool ready_ = false;
 
   bool connectToDevice();
   void startScan();
-  void enqueueKey(const char* key);  // safe to call from any task
+  void bleTaskRun();  // BLE task body
+  void enqueueKey(const char* key);
 
+  static void bleTaskEntry(void* arg);
   static void notifyCallback(NimBLERemoteCharacteristic* ch, uint8_t* data, size_t len, bool isNotify);
   static const char* hidKeyToTmux(uint8_t modifier, uint8_t keycode);
 

@@ -6,8 +6,8 @@
 
 static const char* HID_SERVICE_UUID = "1812";
 static const char* HID_REPORT_UUID = "2a4d";
-static constexpr int KEY_STR_MAX = 12;    // max bytes per key string
-static constexpr int KEY_QUEUE_LEN = 16;  // ring buffer depth
+static constexpr int KEY_STR_MAX = 12;
+static constexpr int KEY_QUEUE_LEN = 16;
 
 BleKeyboard* BleKeyboard::instance_ = nullptr;
 
@@ -88,14 +88,14 @@ const char* BleKeyboard::hidKeyToTmux(uint8_t modifier, uint8_t keycode) {
 }
 
 // ============================================================================
-// Notification → queue  (runs on NimBLE task, must NOT call HTTP)
+// Notify → queue  (NimBLE task — no HTTP allowed here)
 // ============================================================================
 
 void BleKeyboard::enqueueKey(const char* key) {
   if (!keyQueue_ || !key) return;
   char buf[KEY_STR_MAX] = {};
   strncpy(buf, key, KEY_STR_MAX - 1);
-  xQueueSend(keyQueue_, buf, 0);  // non-blocking; drops if full
+  xQueueSend(keyQueue_, buf, 0);
 }
 
 void BleKeyboard::notifyCallback(NimBLERemoteCharacteristic* ch, uint8_t* data, size_t len, bool isNotify) {
@@ -110,7 +110,7 @@ void BleKeyboard::notifyCallback(NimBLERemoteCharacteristic* ch, uint8_t* data, 
 }
 
 // ============================================================================
-// NimBLE callbacks
+// NimBLE callbacks (called from NimBLE task)
 // ============================================================================
 
 void BleKeyboard::onConnect(NimBLEClient* client) {
@@ -140,7 +140,7 @@ void BleKeyboard::onScanEnd(const NimBLEScanResults& results, int reason) {
 }
 
 // ============================================================================
-// Connection — called from main task only
+// Connection (runs inside BLE task)
 // ============================================================================
 
 bool BleKeyboard::connectToDevice() {
@@ -162,7 +162,6 @@ bool BleKeyboard::connectToDevice() {
     return false;
   }
 
-  // Single characteristic lookup — faster and uses less heap than full refresh
   NimBLERemoteService* svc = client_->getService(NimBLEUUID(HID_SERVICE_UUID));
   if (!svc) {
     LOG_ERR("BLE", "HID service not found");
@@ -186,7 +185,7 @@ bool BleKeyboard::connectToDevice() {
     return false;
   }
 
-  ready_ = true;  // notifications can now be processed
+  ready_ = true;
   LOG_INF("BLE", "Keyboard ready");
   return true;
 }
@@ -203,20 +202,36 @@ void BleKeyboard::startScan() {
 }
 
 // ============================================================================
-// Public API
+// BLE task — all blocking BLE work runs here, never in main task
 // ============================================================================
 
-void BleKeyboard::begin(KeyCallback cb) {
-  callback_ = cb;
-  instance_ = this;
-  keyQueue_ = xQueueCreate(KEY_QUEUE_LEN, KEY_STR_MAX);
-  NimBLEDevice::init("X3Terminal");
-  startScan();
+void BleKeyboard::bleTaskEntry(void* arg) {
+  static_cast<BleKeyboard*>(arg)->bleTaskRun();
+  vTaskDelete(nullptr);
 }
 
-void BleKeyboard::stop() {
+void BleKeyboard::bleTaskRun() {
+  NimBLEDevice::init("X3Terminal");
+  startScan();
+
+  while (!stopRequested_) {
+    if (connectPending_) {
+      connectPending_ = false;
+      scanning_ = false;
+      if (!connectToDevice()) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        startScan();
+      }
+    }
+    if (!connected_ && !scanning_ && !connectPending_) {
+      vTaskDelay(pdMS_TO_TICKS(500));
+      if (!stopRequested_) startScan();
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+
+  // Cleanup
   ready_ = false;
-  scanning_ = false;
   connected_ = false;
   if (client_) {
     NimBLEDevice::deleteClient(client_);
@@ -224,31 +239,49 @@ void BleKeyboard::stop() {
   }
   delete device_;
   device_ = nullptr;
-  instance_ = nullptr;
+  NimBLEDevice::deinit(false);
+  LOG_INF("BLE", "BLE task done");
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+void BleKeyboard::begin(KeyCallback cb) {
+  callback_ = cb;
+  instance_ = this;
+  stopRequested_ = false;
+  keyQueue_ = xQueueCreate(KEY_QUEUE_LEN, KEY_STR_MAX);
+  xTaskCreate(bleTaskEntry, "BLE", 4096, this, 1, &bleTask_);
+}
+
+void BleKeyboard::stop() {
+  stopRequested_ = true;
+  // Signal scan/connect to abort
+  NimBLEDevice::getScan()->stop();
+  if (bleTask_) {
+    // Wait up to 3s for task to exit
+    for (int i = 0; i < 60 && bleTask_ && eTaskGetState(bleTask_) != eDeleted; i++) {
+      vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    if (bleTask_ && eTaskGetState(bleTask_) != eDeleted) {
+      vTaskDelete(bleTask_);
+    }
+    bleTask_ = nullptr;
+  }
   if (keyQueue_) {
     vQueueDelete(keyQueue_);
     keyQueue_ = nullptr;
   }
-  NimBLEDevice::deinit(false);
-  LOG_INF("BLE", "BLE stopped");
+  instance_ = nullptr;
 }
 
 void BleKeyboard::loop() {
-  // Process pending connection (must run on main task for HTTP to work)
-  if (connectPending_) {
-    connectPending_ = false;
-    scanning_ = false;
-    if (!connectToDevice()) startScan();
-  }
-
-  // Dispatch queued keys from NimBLE task → main task → HTTP
+  // Dispatch queued keys → HTTP  (main task, non-blocking)
   if (keyQueue_ && callback_) {
     char buf[KEY_STR_MAX];
     while (xQueueReceive(keyQueue_, buf, 0) == pdTRUE) {
       callback_(std::string(buf));
     }
   }
-
-  // Rescan when not connected and not scanning
-  if (!connected_ && !scanning_ && !connectPending_) startScan();
 }
