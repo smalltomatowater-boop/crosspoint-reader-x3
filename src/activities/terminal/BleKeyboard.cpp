@@ -27,8 +27,10 @@ const char* BleKeyboard::hidKeyToTmux(uint8_t modifier, uint8_t keycode) {
     return buf;
   }
 
-  static const char* fkeys[] = {"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"};
-  if (keycode >= 0x3A && keycode <= 0x45) return fkeys[keycode - 0x3A];
+  if (keycode >= 0x3A && keycode <= 0x45) {
+    static const char* fkeys[] = {"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"};
+    return fkeys[keycode - 0x3A];
+  }
 
   switch (keycode) {
     case 0x28:

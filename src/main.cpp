@@ -51,8 +51,8 @@ static SdCardFont sdUiFont10;
 static SdCardFont sdUiFont12;
 
 static bool tryLoadSdUiFonts(GfxRenderer& r) {
-  bool ok10 = sdUiFont10.loadFromMemory(MIGU1M_TERM_10, MIGU1M_TERM_10_SIZE);
-  bool ok12 = sdUiFont12.loadFromMemory(MIGU1M_TERM_12, MIGU1M_TERM_12_SIZE);
+  bool ok10 = sdUiFont10.loadFromMemory(MIGU1M_TERM_08, MIGU1M_TERM_08_SIZE);  // 8pt body
+  bool ok12 = sdUiFont12.loadFromMemory(MIGU1M_TERM_10, MIGU1M_TERM_10_SIZE);  // 10pt title
 
   if (!ok10 || !ok12) {
     LOG_ERR("MAIN", "Migu1M UI font load failed, using built-in Ubuntu fonts");
