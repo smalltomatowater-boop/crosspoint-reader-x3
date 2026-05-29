@@ -13,8 +13,8 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <SPI.h>
-#include <WiFi.h>
 #include <SdCardFont.h>
+#include <WiFi.h>
 #include <builtinFonts/all.h>
 #include <builtinFonts/migu1m_term_08.h>
 #include <builtinFonts/migu1m_term_10.h>
@@ -51,28 +51,28 @@ static SdCardFont sdUiFont10;
 static SdCardFont sdUiFont12;
 
 static bool tryLoadSdUiFonts(GfxRenderer& r) {
-    bool ok10 = sdUiFont10.loadFromMemory(MIGU1M_TERM_10, MIGU1M_TERM_10_SIZE);
-    bool ok12 = sdUiFont12.loadFromMemory(MIGU1M_TERM_12, MIGU1M_TERM_12_SIZE);
+  bool ok10 = sdUiFont10.loadFromMemory(MIGU1M_TERM_10, MIGU1M_TERM_10_SIZE);
+  bool ok12 = sdUiFont12.loadFromMemory(MIGU1M_TERM_12, MIGU1M_TERM_12_SIZE);
 
-    if (!ok10 || !ok12) {
-        LOG_ERR("MAIN", "Migu1M UI font load failed, using built-in Ubuntu fonts");
-        return false;
-    }
+  if (!ok10 || !ok12) {
+    LOG_ERR("MAIN", "Migu1M UI font load failed, using built-in Ubuntu fonts");
+    return false;
+  }
 
-    EpdFont* reg10 = sdUiFont10.getEpdFont(0);
-    EpdFont* reg12 = sdUiFont12.getEpdFont(0);
-    if (!reg10 || !reg12) {
-        LOG_ERR("MAIN", "Migu1M: regular style missing");
-        return false;
-    }
+  EpdFont* reg10 = sdUiFont10.getEpdFont(0);
+  EpdFont* reg12 = sdUiFont12.getEpdFont(0);
+  if (!reg10 || !reg12) {
+    LOG_ERR("MAIN", "Migu1M: regular style missing");
+    return false;
+  }
 
-    EpdFontFamily ui10(reg10, sdUiFont10.getEpdFont(1), sdUiFont10.getEpdFont(2), sdUiFont10.getEpdFont(3));
-    EpdFontFamily ui12(reg12, sdUiFont12.getEpdFont(1), sdUiFont12.getEpdFont(2), sdUiFont12.getEpdFont(3));
-    r.replaceFont(UI_10_FONT_ID, ui10);
-    r.replaceFont(UI_12_FONT_ID, ui12);
-    r.replaceFont(SMALL_FONT_ID, ui10);
-    LOG_INF("MAIN", "Migu1M UI font loaded from flash (Japanese UI enabled)");
-    return true;
+  EpdFontFamily ui10(reg10, sdUiFont10.getEpdFont(1), sdUiFont10.getEpdFont(2), sdUiFont10.getEpdFont(3));
+  EpdFontFamily ui12(reg12, sdUiFont12.getEpdFont(1), sdUiFont12.getEpdFont(2), sdUiFont12.getEpdFont(3));
+  r.replaceFont(UI_10_FONT_ID, ui10);
+  r.replaceFont(UI_12_FONT_ID, ui12);
+  r.replaceFont(SMALL_FONT_ID, ui10);
+  LOG_INF("MAIN", "Migu1M UI font loaded from flash (Japanese UI enabled)");
+  return true;
 }
 
 // Fonts

@@ -14,10 +14,10 @@
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "network/CrossPointWebServerActivity.h"
-#include "terminal/TerminalActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
+#include "terminal/TerminalActivity.h"
 #include "util/FullScreenMessageActivity.h"
 
 void ActivityManager::begin() {
@@ -174,9 +174,7 @@ void ActivityManager::goToFileTransfer() {
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 
-void ActivityManager::goToTerminal() {
-  replaceActivity(makeUniqueNoThrow<TerminalActivity>(renderer, mappedInput));
-}
+void ActivityManager::goToTerminal() { replaceActivity(makeUniqueNoThrow<TerminalActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
