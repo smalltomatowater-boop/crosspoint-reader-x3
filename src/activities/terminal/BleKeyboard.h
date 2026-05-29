@@ -5,6 +5,9 @@
 #include <functional>
 #include <string>
 
+// BLE HID host for keyboard input.
+// TODO: Implement using NimBLE-Arduino for stable WiFi+BLE coexistence.
+// Bluedroid (standard BLE library) crashes when used alongside WiFi on ESP32-C3.
 class BleKeyboard {
  public:
   using KeyCallback = std::function<void(const std::string& key)>;
