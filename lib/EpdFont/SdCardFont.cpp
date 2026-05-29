@@ -670,7 +670,11 @@ bool SdCardFont::loadFromMemory(const uint8_t* data, size_t size) {
     hash = fnv1a(tocBuf, STYLE_TOC_ENTRY_SIZE, hash);
 
     uint8_t styleId = tocBuf[0];
-    if (styleId >= MAX_STYLES) { freeAll(); memData_ = nullptr; return false; }
+    if (styleId >= MAX_STYLES) {
+      freeAll();
+      memData_ = nullptr;
+      return false;
+    }
 
     auto& s = styles_[styleId];
     s.present = true;
@@ -730,9 +734,12 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
       EpdUnicodeInterval iv;
       size_t off = s.intervalsFileOffset + static_cast<size_t>(mid) * sizeof(EpdUnicodeInterval);
       memcpy(&iv, memData_ + off, sizeof(EpdUnicodeInterval));
-      if (codepoint < iv.first) right = mid - 1;
-      else if (codepoint > iv.last) left = mid + 1;
-      else return static_cast<int32_t>(iv.offset + (codepoint - iv.first));
+      if (codepoint < iv.first)
+        right = mid - 1;
+      else if (codepoint > iv.last)
+        left = mid + 1;
+      else
+        return static_cast<int32_t>(iv.offset + (codepoint - iv.first));
     }
     return -1;
   }
@@ -741,9 +748,12 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
   while (left <= right) {
     int mid = left + (right - left) / 2;
     const auto& interval = s.fullIntervals[mid];
-    if (codepoint < interval.first) right = mid - 1;
-    else if (codepoint > interval.last) left = mid + 1;
-    else return static_cast<int32_t>(interval.offset + (codepoint - interval.first));
+    if (codepoint < interval.first)
+      right = mid - 1;
+    else if (codepoint > interval.last)
+      left = mid + 1;
+    else
+      return static_cast<int32_t>(interval.offset + (codepoint - interval.first));
   }
   return -1;
 }
@@ -944,7 +954,9 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       if (gIdx != lastReadIndex + 1) seekCount++;
       if (!readAt(fileOff, reinterpret_cast<uint8_t*>(&s.miniGlyphs[mapIdx]), sizeof(EpdGlyph))) {
         LOG_ERR("SDCF", "Prewarm: short glyph read (style %u, glyph %d)", styleIdx, gIdx);
-        delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+        delete[] readOrder;
+        delete[] mappings;
+        freeStyleMiniData(s);
         return static_cast<int>(cpCount);
       }
       lastReadIndex = gIdx;
@@ -954,7 +966,9 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     HalFile file;
     if (!Storage.openFileForRead("SDCF", filePath_, file)) {
       LOG_ERR("SDCF", "Failed to reopen .cpfont for prewarm (style %u)", styleIdx);
-      delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+      delete[] readOrder;
+      delete[] mappings;
+      freeStyleMiniData(s);
       return static_cast<int>(cpCount);
     }
     int32_t lastReadIndex = INT32_MIN;
@@ -965,14 +979,19 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       if (gIdx != lastReadIndex + 1) {
         if (!file.seekSet(fileOff)) {
           LOG_ERR("SDCF", "Prewarm: failed to seek to glyph %d (style %u)", gIdx, styleIdx);
-          file.close(); delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+          file.close();
+          delete[] readOrder;
+          delete[] mappings;
+          freeStyleMiniData(s);
           return static_cast<int>(cpCount);
         }
         seekCount++;
       }
       if (file.read(reinterpret_cast<uint8_t*>(&s.miniGlyphs[mapIdx]), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
         LOG_ERR("SDCF", "Prewarm: short glyph read (style %u, glyph %d)", styleIdx, gIdx);
-        delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+        delete[] readOrder;
+        delete[] mappings;
+        freeStyleMiniData(s);
         return static_cast<int>(cpCount);
       }
       lastReadIndex = gIdx;
@@ -987,7 +1006,9 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     s.miniBitmap = new (std::nothrow) uint8_t[totalBitmapSize > 0 ? totalBitmapSize : 1];
     if (!s.miniBitmap) {
       LOG_ERR("SDCF", "Failed to allocate mini bitmap (%u bytes) for style %u", totalBitmapSize, styleIdx);
-      delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+      delete[] readOrder;
+      delete[] mappings;
+      freeStyleMiniData(s);
       return static_cast<int>(cpCount);
     }
 
@@ -1001,12 +1022,17 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       for (uint32_t i = 0; i < validCount; i++) {
         uint32_t mapIdx = readOrder[i];
         EpdGlyph& glyph = s.miniGlyphs[mapIdx];
-        if (glyph.dataLength == 0) { glyph.dataOffset = miniBitmapOffset; continue; }
+        if (glyph.dataLength == 0) {
+          glyph.dataOffset = miniBitmapOffset;
+          continue;
+        }
         uint32_t fileOff = s.bitmapFileOffset + glyph.dataOffset;
         if (fileOff != lastBitmapEnd) seekCount++;
         if (!readAt(fileOff, s.miniBitmap + miniBitmapOffset, glyph.dataLength)) {
           LOG_ERR("SDCF", "Prewarm: short bitmap read (style %u)", styleIdx);
-          delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+          delete[] readOrder;
+          delete[] mappings;
+          freeStyleMiniData(s);
           return static_cast<int>(cpCount);
         }
         lastBitmapEnd = fileOff + glyph.dataLength;
@@ -1017,25 +1043,35 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       HalFile file;
       if (!Storage.openFileForRead("SDCF", filePath_, file)) {
         LOG_ERR("SDCF", "Prewarm: failed to reopen for bitmap (style %u)", styleIdx);
-        delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+        delete[] readOrder;
+        delete[] mappings;
+        freeStyleMiniData(s);
         return static_cast<int>(cpCount);
       }
       for (uint32_t i = 0; i < validCount; i++) {
         uint32_t mapIdx = readOrder[i];
         EpdGlyph& glyph = s.miniGlyphs[mapIdx];
-        if (glyph.dataLength == 0) { glyph.dataOffset = miniBitmapOffset; continue; }
+        if (glyph.dataLength == 0) {
+          glyph.dataOffset = miniBitmapOffset;
+          continue;
+        }
         uint32_t fileOff = s.bitmapFileOffset + glyph.dataOffset;
         if (fileOff != lastBitmapEnd) {
           if (!file.seekSet(fileOff)) {
             LOG_ERR("SDCF", "Prewarm: failed to seek to bitmap (style %u)", styleIdx);
-            file.close(); delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+            file.close();
+            delete[] readOrder;
+            delete[] mappings;
+            freeStyleMiniData(s);
             return static_cast<int>(cpCount);
           }
           seekCount++;
         }
         if (file.read(s.miniBitmap + miniBitmapOffset, glyph.dataLength) != static_cast<int>(glyph.dataLength)) {
           LOG_ERR("SDCF", "Prewarm: short bitmap read (style %u)", styleIdx);
-          delete[] readOrder; delete[] mappings; freeStyleMiniData(s);
+          delete[] readOrder;
+          delete[] mappings;
+          freeStyleMiniData(s);
           return static_cast<int>(cpCount);
         }
         lastBitmapEnd = fileOff + glyph.dataLength;

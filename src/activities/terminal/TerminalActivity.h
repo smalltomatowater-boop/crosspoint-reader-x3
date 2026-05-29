@@ -2,19 +2,18 @@
 
 #include <ArduinoJson.h>
 #include <GfxRenderer.h>
+#include <SdCardFont.h>
 #include <WebServer.h>
+#include <builtinFonts/migu1m_term_08.h>
 
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <SdCardFont.h>
-#include <builtinFonts/migu1m_term_08.h>
-
 #include "BleKeyboard.h"
-#include "fontIds.h"
 #include "activities/Activity.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "fontIds.h"
 
 class TerminalActivity final : public Activity {
  public:
@@ -35,7 +34,7 @@ class TerminalActivity final : public Activity {
 
   // Font metrics — computed in onEnter from UI_12_FONT_ID (Migu1M)
   static constexpr uint8_t LEFT_MARGIN = 4;
-  static constexpr uint8_t TOP_MARGIN  = 4;
+  static constexpr uint8_t TOP_MARGIN = 4;
   uint8_t charW_ = 14;  // ASCII cell width (monospace half-width)
   uint8_t charH_ = 28;  // line height
   uint8_t maxCols = 0;
