@@ -22,7 +22,7 @@ static constexpr int HTTP_PORT = 80;
 // Helpers
 // ============================================================================
 
-std::string TerminalActivity::limitLine(const std::string& s, uint8_t maxLen) {
+std::string TerminalActivity::limitLine(const std::string& s, uint8_t /*maxLen*/) {
     std::string out = s;
     out.erase(std::remove(out.begin(), out.end(), '\r'), out.end());
     std::string expanded;
@@ -30,7 +30,8 @@ std::string TerminalActivity::limitLine(const std::string& s, uint8_t maxLen) {
         if (c == '\t') expanded += "    ";
         else expanded += c;
     }
-    if (expanded.size() > maxLen) expanded.resize(maxLen);
+    // No byte-level truncation: renderer clips at display edge.
+    // Byte truncation would break multi-byte UTF-8 sequences.
     return expanded;
 }
 
@@ -75,6 +76,16 @@ bool TerminalActivity::applyFrame(JsonDocument& doc) {
 // Rendering
 // ============================================================================
 
+void TerminalActivity::applyFontMetrics() {
+    charH_ = static_cast<uint8_t>(renderer.getLineHeight(activeFontId_));
+    charW_ = static_cast<uint8_t>(renderer.getTextWidth(activeFontId_, "A"));
+    if (charW_ == 0) charW_ = charH_ / 2;
+    maxCols = (displayWidth  - LEFT_MARGIN * 2) / charW_;
+    maxRows = (displayHeight - TOP_MARGIN)       / charH_;
+    LOG_INF("TERM", "Font metrics: %dx%d cells (cell %dx%d px)",
+            maxCols, maxRows, charW_, charH_);
+}
+
 void TerminalActivity::drawCursor(uint16_t col, uint16_t row) {
     int16_t x = LEFT_MARGIN + col * charW_;
     int16_t y = TOP_MARGIN  + row * charH_;
@@ -87,17 +98,21 @@ void TerminalActivity::drawFrame() {
     if (!frameReceived) {
         char ipLine[48];
         snprintf(ipLine, sizeof(ipLine), "IP: %s", WiFi.localIP().toString().c_str());
-        int midX = displayWidth / 2 - 60;
-        int midY = displayHeight / 2 - charH_;
-        renderer.drawText(UI_12_FONT_ID, midX, midY,            "X3 Terminal",        true);
-        renderer.drawText(UI_12_FONT_ID, midX, midY + charH_,   "Waiting for frames...", true);
-        renderer.drawText(UI_12_FONT_ID, midX, midY + charH_*2, ipLine,               true);
+        char fontLine[48];
+        snprintf(fontLine, sizeof(fontLine), "Font: %s",
+                 "Migu1M Level-1");
+        int midX = 8;
+        int midY = displayHeight / 2 - charH_ * 2;
+        renderer.drawText(activeFontId_, midX, midY,            "X3 Terminal",                 true);
+        renderer.drawText(activeFontId_, midX, midY + charH_,   "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e: \xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\xe3\x81\x88\xe3\x81\x8a", true);
+        renderer.drawText(activeFontId_, midX, midY + charH_*2, ipLine,                        true);
+        renderer.drawText(activeFontId_, midX, midY + charH_*3, fontLine,                      true);
         return;
     }
 
     for (size_t row = 0; row < rows.size() && row < maxRows; row++) {
         int16_t y = TOP_MARGIN + row * charH_;
-        renderer.drawText(UI_12_FONT_ID, LEFT_MARGIN, y, rows[row].c_str(), true);
+        renderer.drawText(activeFontId_, LEFT_MARGIN, y, rows[row].c_str(), true);
     }
     drawCursor(cursorX, cursorY);
 }
@@ -122,6 +137,7 @@ void TerminalActivity::startServer() {
     server->on("/", HTTP_GET, [this]() { handleRoot(); });
     server->on("/status", HTTP_GET, [this]() { handleStatus(); });
     server->on("/frame", HTTP_POST, [this]() { handleFrame(); });
+    server->on("/fontsize", HTTP_POST, [this]() { handleFontSize(); });
     server->on("/display/clear", HTTP_POST, [this]() { handleDisplayClear(); });
     server->on("/exit", HTTP_POST, [this]() { handleExitTerminal(); });
     server->onNotFound([this]() { server->send(404, "text/plain", "Not found\n"); });
@@ -173,6 +189,40 @@ void TerminalActivity::handleFrame() {
     server->send(204, "text/plain", "");
 }
 
+void TerminalActivity::handleFontSize() {
+    if (!server->hasArg("plain")) {
+        server->send(400, "text/plain", "Missing body\n");
+        return;
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, server->arg("plain"))) {
+        server->send(400, "text/plain", "JSON error\n");
+        return;
+    }
+    int size = doc["size"] | 10;
+    int newFont = UI_10_FONT_ID;
+    if (size == 8) newFont = TERM_8_FONT_ID;
+
+    if (newFont == TERM_8_FONT_ID && !termFont8_.getEpdFont(0)) {
+        server->send(400, "text/plain", "8pt font not loaded\n");
+        return;
+    }
+
+    activeFontId_ = newFont;
+    applyFontMetrics();
+    fullRefreshNeeded = true;
+    frameDirty = true;
+
+    JsonDocument resp;
+    resp["ok"]   = true;
+    resp["size"] = size;
+    resp["cols"] = maxCols;
+    resp["rows"] = maxRows;
+    String body;
+    serializeJson(resp, body);
+    server->send(200, "application/json", body);
+}
+
 void TerminalActivity::handleDisplayClear() {
     frameReceived = false;
     fullRefreshNeeded = true;
@@ -196,14 +246,20 @@ void TerminalActivity::onEnter() {
     displayWidth  = renderer.getDisplayWidth();
     displayHeight = renderer.getDisplayHeight();
 
-    // Derive cell size from Migu1M (UI_12_FONT_ID) metrics
-    charH_ = static_cast<uint8_t>(renderer.getLineHeight(UI_12_FONT_ID));
-    // Migu1M is monospace: ASCII advance = half of CJK advance = half of line height
-    charW_ = static_cast<uint8_t>(renderer.getTextWidth(UI_12_FONT_ID, "A"));
-    if (charW_ == 0) charW_ = charH_ / 2;  // fallback
+    // Load 8pt font for high-density mode
+    if (termFont8_.loadFromMemory(MIGU1M_TERM_08, MIGU1M_TERM_08_SIZE)) {
+        EpdFont* reg = termFont8_.getEpdFont(0);
+        if (reg) {
+            EpdFontFamily fam(reg, termFont8_.getEpdFont(1),
+                              termFont8_.getEpdFont(2), termFont8_.getEpdFont(3));
+            renderer.replaceFont(TERM_8_FONT_ID, fam);
+            LOG_INF("TERM", "8pt font loaded");
+        }
+    }
 
-    maxCols = (displayWidth  - LEFT_MARGIN * 2) / charW_;
-    maxRows = (displayHeight - TOP_MARGIN)       / charH_;
+    // Default: 10pt (server can switch via POST /fontsize)
+    activeFontId_ = UI_10_FONT_ID;
+    applyFontMetrics();
 
     LOG_INF("TERM", "Terminal: %dx%d cells (cell %dx%d px, display %dx%d px)",
             maxCols, maxRows, charW_, charH_, displayWidth, displayHeight);

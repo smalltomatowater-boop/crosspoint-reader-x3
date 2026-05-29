@@ -8,7 +8,11 @@
 #include <string>
 #include <vector>
 
+#include <SdCardFont.h>
+#include <builtinFonts/migu1m_term_08.h>
+
 #include "BleKeyboard.h"
+#include "fontIds.h"
 #include "activities/Activity.h"
 #include "activities/network/WifiSelectionActivity.h"
 
@@ -49,6 +53,10 @@ class TerminalActivity final : public Activity {
   static constexpr unsigned long MIN_FULL_REFRESH_MS = 1800;
   static constexpr unsigned long MIN_FAST_REFRESH_MS = 450;
 
+  static constexpr int TERM_8_FONT_ID = 0x54524D38;  // "TRM8"
+  SdCardFont termFont8_;
+  int activeFontId_ = UI_10_FONT_ID;
+
   // HTTP server
   std::unique_ptr<WebServer> server;
 
@@ -66,8 +74,11 @@ class TerminalActivity final : public Activity {
   void handleRoot();
   void handleStatus();
   void handleFrame();
+  void handleFontSize();
   void handleDisplayClear();
   void handleExitTerminal();
+
+  void applyFontMetrics();
 
   bool applyFrame(JsonDocument& doc);
   void drawFrame();

@@ -32,8 +32,9 @@ from flask import Flask, jsonify, redirect, render_template_string, request, url
 DEFAULT_CONFIG = {
     "x3_ip": "http://192.168.128.209",
     "tmux_session": "x3-terminal",
-    "cols": 65,
-    "rows": 32,
+    "cols": 71,
+    "rows": 22,
+    "font_size": 10,
     "poll_interval": 0.25,
     "post_timeout": 1.0,
 }
@@ -103,7 +104,35 @@ class Bridge:
         payload = {"cols": self.cfg["cols"], "rows": [], "cursor": [0, 0]}
         _post_frame(self.cfg["x3_ip"], payload, self.cfg["post_timeout"])
 
+    def _apply_font_and_discover(self) -> None:
+        """POST /fontsize to X3 and auto-discover cols/rows from /status."""
+        size = self.cfg.get("font_size", 10)
+        url_font = self.cfg["x3_ip"].rstrip("/") + "/fontsize"
+        url_status = self.cfg["x3_ip"].rstrip("/") + "/status"
+        try:
+            data = json.dumps({"size": size}).encode()
+            req = urllib.request.Request(url_font, data=data,
+                                         headers={"Content-Type": "application/json"},
+                                         method="POST")
+            with urllib.request.urlopen(req, timeout=self.cfg["post_timeout"]) as r:
+                resp = json.loads(r.read())
+                if resp.get("ok"):
+                    self.cfg["cols"] = resp["cols"]
+                    self.cfg["rows"] = resp["rows"]
+                    return
+        except Exception:
+            pass
+        # Fallback: query /status
+        try:
+            with urllib.request.urlopen(url_status, timeout=self.cfg["post_timeout"]) as r:
+                st = json.loads(r.read())
+                self.cfg["cols"] = st.get("cols", self.cfg["cols"])
+                self.cfg["rows"] = st.get("rows", self.cfg["rows"])
+        except Exception:
+            pass
+
     def _loop(self) -> None:
+        self._apply_font_and_discover()
         target = self.cfg["tmux_session"] + ":"
         cols = self.cfg["cols"]
         rows = self.cfg["rows"]
@@ -146,9 +175,9 @@ def _ensure_pane_size(target: str, cols: int, rows: int) -> None:
 
 def _clean_line(line: str, cols: int) -> str:
     line = line.translate(GLYPH_MAP)
-    line = unicodedata.normalize("NFKD", line)
-    line = line.encode("ascii", "replace").decode("ascii")
-    line = "".join(ch if ch == "\t" or 32 <= ord(ch) <= 126 else " " for ch in line)
+    line = unicodedata.normalize("NFKC", line)
+    # Keep printable Unicode (Japanese, etc.) and tab; strip only control chars
+    line = "".join(ch if ch == "\t" or ch.isprintable() else " " for ch in line)
     line = line.replace("\t", "    ")
     return line.rstrip()
 
@@ -156,13 +185,7 @@ def _wrap(lines: list[str], cols: int, rows: int) -> list[str]:
     wrapped: list[str] = []
     for line in lines:
         clean = _clean_line(line, cols)
-        if not clean:
-            wrapped.append("")
-            continue
-        chunks = textwrap.wrap(clean, width=cols, break_long_words=True,
-                               break_on_hyphens=False, replace_whitespace=False,
-                               drop_whitespace=False)
-        wrapped.extend(c[:cols] for c in chunks)
+        wrapped.append(clean)  # tmux already renders at correct display width
     if len(wrapped) < rows:
         wrapped = [""] * (rows - len(wrapped)) + wrapped
     return wrapped[-rows:]
@@ -181,7 +204,7 @@ def _cursor(target: str) -> list[int]:
         return [0, 0]
 
 def _post_frame(base_url: str, payload: dict, timeout: float) -> bool:
-    data = json.dumps(payload, separators=(",", ":")).encode()
+    data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         base_url.rstrip("/") + "/frame", data=data,
         headers={"Content-Type": "application/json"}, method="POST")
@@ -267,12 +290,17 @@ DASHBOARD_HTML = """
     <input type="text" name="x3_ip" value="{{ cfg.x3_ip }}">
     <label>tmux セッション名</label>
     <input type="text" name="tmux_session" value="{{ cfg.tmux_session }}">
-    <label>列数</label>
+    <label>フォントサイズ</label>
+    <select name="font_size">
+      <option value="8" {% if cfg.font_size == 8 %}selected{% endif %}>8pt（高密度 ~80列）</option>
+      <option value="10" {% if cfg.font_size != 8 %}selected{% endif %}>10pt（標準 ~71列）</option>
+    </select>
+    <label>列数（自動取得）</label>
     <input type="text" name="cols" value="{{ cfg.cols }}">
-    <label>行数</label>
+    <label>行数（自動取得）</label>
     <input type="text" name="rows" value="{{ cfg.rows }}">
     <br>
-    <button class="btn btn-primary" style="margin-top:12px">保存</button>
+    <button class="btn btn-primary" style="margin-top:12px">保存して再起動</button>
   </form>
 </div>
 
@@ -425,6 +453,8 @@ def create_app(bridge: Bridge, cfg_path: Path) -> Flask:
             form = request.form
             cfg["x3_ip"]        = form.get("x3_ip", cfg["x3_ip"]).strip()
             cfg["tmux_session"] = form.get("tmux_session", cfg["tmux_session"]).strip()
+            try: cfg["font_size"] = int(form.get("font_size", cfg.get("font_size", 10)))
+            except ValueError: pass
             try: cfg["cols"] = int(form.get("cols", cfg["cols"]))
             except ValueError: pass
             try: cfg["rows"] = int(form.get("rows", cfg["rows"]))

@@ -16,8 +16,9 @@
 #include <WiFi.h>
 #include <SdCardFont.h>
 #include <builtinFonts/all.h>
-#include <builtinFonts/migu1m_ui_10.h>
-#include <builtinFonts/migu1m_ui_12.h>
+#include <builtinFonts/migu1m_term_08.h>
+#include <builtinFonts/migu1m_term_10.h>
+#include <builtinFonts/migu1m_term_12.h>
 
 #include <cstring>
 
@@ -50,8 +51,8 @@ static SdCardFont sdUiFont10;
 static SdCardFont sdUiFont12;
 
 static bool tryLoadSdUiFonts(GfxRenderer& r) {
-    bool ok10 = sdUiFont10.loadFromMemory(MIGU1M_UI_10, MIGU1M_UI_10_SIZE);
-    bool ok12 = sdUiFont12.loadFromMemory(MIGU1M_UI_12, MIGU1M_UI_12_SIZE);
+    bool ok10 = sdUiFont10.loadFromMemory(MIGU1M_TERM_10, MIGU1M_TERM_10_SIZE);
+    bool ok12 = sdUiFont12.loadFromMemory(MIGU1M_TERM_12, MIGU1M_TERM_12_SIZE);
 
     if (!ok10 || !ok12) {
         LOG_ERR("MAIN", "Migu1M UI font load failed, using built-in Ubuntu fonts");

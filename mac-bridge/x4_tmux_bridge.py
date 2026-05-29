@@ -71,9 +71,8 @@ def ensure_target_size(target: str, cols: int, rows: int) -> None:
 
 def clean_line(line: str, cols: int) -> str:
     line = line.translate(GLYPH_MAP)
-    line = unicodedata.normalize("NFKD", line)
-    line = line.encode("ascii", "replace").decode("ascii")
-    line = "".join(ch if ch == "\t" or 32 <= ord(ch) <= 126 else " " for ch in line)
+    line = unicodedata.normalize("NFKC", line)
+    line = "".join(ch if ch == "\t" or ch.isprintable() else " " for ch in line)
     line = line.replace("\t", "    ")
     return line.rstrip()
 
@@ -82,18 +81,7 @@ def wrap_lines(lines: list[str], cols: int, rows: int) -> list[str]:
     wrapped: list[str] = []
     for line in lines:
         clean = clean_line(line, cols)
-        if not clean:
-            wrapped.append("")
-            continue
-        chunks = textwrap.wrap(
-            clean,
-            width=cols,
-            break_long_words=True,
-            break_on_hyphens=False,
-            replace_whitespace=False,
-            drop_whitespace=False,
-        )
-        wrapped.extend(chunk[:cols] for chunk in chunks)
+        wrapped.append(clean)
     if len(wrapped) < rows:
         wrapped = [""] * (rows - len(wrapped)) + wrapped
     return wrapped[-rows:]
@@ -116,7 +104,7 @@ def cursor(target: str) -> list[int]:
 
 
 def post_frame(base_url: str, payload: dict, timeout: float) -> bool:
-    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         base_url.rstrip("/") + "/frame",
         data=data,

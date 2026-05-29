@@ -389,8 +389,11 @@ void SdCardFont::applyGlyphMissCallback(uint8_t styleIdx) {
   auto& s = styles_[styleIdx];
   s.stubData.glyphMissHandler = &SdCardFont::onGlyphMiss;
   s.stubData.glyphMissCtx = &overflowCtx_[styleIdx];
+  // When fullIntervals is null (memory mode), set intervalCount=0 so
+  // EpdFont::getGlyph() skips the interval table and calls the miss handler
+  // for every codepoint. The miss handler reads directly from flash via memData_.
   s.stubData.intervals = s.fullIntervals;
-  s.stubData.intervalCount = s.header.intervalCount;
+  s.stubData.intervalCount = s.fullIntervals ? s.header.intervalCount : 0;
 }
 
 // --- Compute per-style file offsets from a base data offset ---
@@ -694,20 +697,11 @@ bool SdCardFont::loadFromMemory(const uint8_t* data, size_t size) {
     auto& s = styles_[i];
     if (!s.present) continue;
 
-    // Memory mode: load intervals into RAM for getGlyph() to use directly.
-    // ~55KB per style with 4586 CJK intervals — fits within 320KB RAM.
-    s.fullIntervals = new (std::nothrow) EpdUnicodeInterval[s.header.intervalCount];
-    if (!s.fullIntervals) {
-      LOG_ERR("SDCF", "loadFromMemory: OOM intervals style %u", i);
-      freeAll(); memData_ = nullptr;
-      return false;
-    }
-    size_t intervalsBytes = s.header.intervalCount * sizeof(EpdUnicodeInterval);
-    if (!readAt(s.intervalsFileOffset, reinterpret_cast<uint8_t*>(s.fullIntervals), intervalsBytes)) {
-      LOG_ERR("SDCF", "loadFromMemory: failed to read intervals style %u", i);
-      freeAll(); memData_ = nullptr;
-      return false;
-    }
+    // Memory mode: intervals stay in flash (memData_); no RAM copy needed.
+    // findGlobalGlyphIndex() reads directly from memData_ via memcpy.
+    // fullIntervals left null — applyGlyphMissCallback sets intervalCount=0
+    // so EpdFont::getGlyph() skips the in-RAM lookup and routes every
+    // codepoint through the miss handler, which reads from flash.
 
     memset(&s.stubData, 0, sizeof(s.stubData));
     s.stubData.advanceY = s.header.advanceY;
