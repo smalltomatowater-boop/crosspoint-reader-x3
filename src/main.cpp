@@ -14,7 +14,10 @@
 #include <Logging.h>
 #include <SPI.h>
 #include <WiFi.h>
+#include <SdCardFont.h>
 #include <builtinFonts/all.h>
+#include <builtinFonts/migu1m_ui_10.h>
+#include <builtinFonts/migu1m_ui_12.h>
 
 #include <cstring>
 
@@ -41,6 +44,35 @@ FontDecompressor fontDecompressor;
 SdCardFontSystem sdFontSystem;
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts());
 static unsigned long allowSleepAt = 0;
+
+// SD card UI fonts (Migu1M for Japanese UI support)
+static SdCardFont sdUiFont10;
+static SdCardFont sdUiFont12;
+
+static bool tryLoadSdUiFonts(GfxRenderer& r) {
+    bool ok10 = sdUiFont10.loadFromMemory(MIGU1M_UI_10, MIGU1M_UI_10_SIZE);
+    bool ok12 = sdUiFont12.loadFromMemory(MIGU1M_UI_12, MIGU1M_UI_12_SIZE);
+
+    if (!ok10 || !ok12) {
+        LOG_ERR("MAIN", "Migu1M UI font load failed, using built-in Ubuntu fonts");
+        return false;
+    }
+
+    EpdFont* reg10 = sdUiFont10.getEpdFont(0);
+    EpdFont* reg12 = sdUiFont12.getEpdFont(0);
+    if (!reg10 || !reg12) {
+        LOG_ERR("MAIN", "Migu1M: regular style missing");
+        return false;
+    }
+
+    EpdFontFamily ui10(reg10, sdUiFont10.getEpdFont(1), sdUiFont10.getEpdFont(2), sdUiFont10.getEpdFont(3));
+    EpdFontFamily ui12(reg12, sdUiFont12.getEpdFont(1), sdUiFont12.getEpdFont(2), sdUiFont12.getEpdFont(3));
+    r.replaceFont(UI_10_FONT_ID, ui10);
+    r.replaceFont(UI_12_FONT_ID, ui12);
+    r.replaceFont(SMALL_FONT_ID, ui10);
+    LOG_INF("MAIN", "Migu1M UI font loaded from flash (Japanese UI enabled)");
+    return true;
+}
 
 // Fonts
 EpdFont notoserif14RegularFont(&notoserif_14_regular);
@@ -320,11 +352,15 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(OPENDYSLEXIC_12_FONT_ID, opendyslexic12FontFamily);
   renderer.insertFont(OPENDYSLEXIC_14_FONT_ID, opendyslexic14FontFamily);
 #endif  // OMIT_FONTS
+  // Always register Ubuntu as UI font fallback
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
 
-  // Discover and load SD card fonts
+  // Replace UI fonts with Migu1M if available on SD card
+  tryLoadSdUiFonts(renderer);
+
+  // Discover and register SD card reader fonts
   sdFontSystem.begin(renderer);
 
   LOG_DBG("MAIN", "Fonts setup");

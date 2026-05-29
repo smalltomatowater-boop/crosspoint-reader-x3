@@ -167,7 +167,7 @@ const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
 
     if (it != intervals) {
       const auto& interval = *(it - 1);
-      if (cp <= interval.last) {
+      if (cp <= interval.last && data->glyph != nullptr) {
         return &data->glyph[interval.offset + (cp - interval.first)];
       }
     }

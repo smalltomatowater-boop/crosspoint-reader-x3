@@ -37,6 +37,10 @@ class SdCardFont {
   // Returns true on success.
   bool load(const char* path);
 
+  // Load .cpfont data from a PROGMEM/flash byte array instead of SD card.
+  // Glyph bitmap data is read from the memory buffer on demand (no SD access).
+  bool loadFromMemory(const uint8_t* data, size_t size);
+
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
   // Default 0x0F = all present styles.
@@ -229,6 +233,10 @@ class SdCardFont {
   uint32_t contentHash_ = 0;
   bool loaded_ = false;
 
+  // Memory mode: if set, glyph data is read from flash instead of SD card
+  const uint8_t* memData_ = nullptr;
+  size_t memSize_ = 0;
+
   // Per-style helpers
   void freeStyleMiniData(PerStyle& s);
   void freeStyleAll(PerStyle& s);
@@ -248,6 +256,8 @@ class SdCardFont {
   void freeAll();
   void clearOverflow();
   static void computeStyleFileOffsets(PerStyle& s, uint32_t baseOffset);
+  // Unified read: reads `len` bytes at `offset` from either memory or SD card.
+  bool readAt(size_t offset, uint8_t* buf, size_t len) const;
 
   // Static callback for EpdFontData::glyphMissHandler (per-style via OverflowContext)
   static const EpdGlyph* onGlyphMiss(void* ctx, uint32_t codepoint);

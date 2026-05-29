@@ -1,6 +1,7 @@
 #include "ActivityManager.h"
 
 #include <HalPowerManager.h>
+#include <Memory.h>
 
 #include <algorithm>
 
@@ -13,6 +14,7 @@
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "network/CrossPointWebServerActivity.h"
+#include "terminal/TerminalActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
@@ -170,6 +172,10 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
 
 void ActivityManager::goToFileTransfer() {
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
+}
+
+void ActivityManager::goToTerminal() {
+  replaceActivity(makeUniqueNoThrow<TerminalActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }

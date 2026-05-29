@@ -93,6 +93,15 @@ void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   }
 }
 
+void GfxRenderer::replaceFont(const int fontId, EpdFontFamily font) {
+  auto it = fontMap.find(fontId);
+  if (it != fontMap.end()) {
+    it->second = font;
+  } else {
+    fontMap.insert({fontId, font});
+  }
+}
+
 // Translate logical (x,y) coordinates to physical panel coordinates based on current orientation
 // This should always be inlined for better performance
 static inline void rotateCoordinates(const GfxRenderer::Orientation orientation, const int x, const int y, int* phyX,

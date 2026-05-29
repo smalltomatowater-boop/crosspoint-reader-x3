@@ -87,6 +87,7 @@ class GfxRenderer {
   // Setup
   void begin();  // must be called right after display.begin()
   void insertFont(int fontId, EpdFontFamily font);
+  void replaceFont(int fontId, EpdFontFamily font);
   // Clears both the flash-font map and any SD-font registration for fontId.
   // Coupled to avoid dangling SdCardFont* in sdCardFonts_ when callers free
   // the underlying SdCardFont and forget the SD-side unregister.
