@@ -1,6 +1,7 @@
 #include "Activity.h"
 
 #include "ActivityManager.h"
+#include "util/XtcDebugLog.h"
 
 void Activity::onEnter() { LOG_DBG("ACT", "Entering activity: %s", name.c_str()); }
 
@@ -12,7 +13,10 @@ void Activity::requestUpdateAndWait() { activityManager.requestUpdateAndWait(); 
 
 void Activity::onGoHome(HomeMenuItem item) { activityManager.goHome(item); }
 
-void Activity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
+void Activity::onSelectBook(const std::string& path) {
+  XtcDebugLog::log("Activity::onSelectBook path=%s", path.c_str());
+  activityManager.goToReader(path);
+}
 
 void Activity::startActivityForResult(std::unique_ptr<Activity>&& activity, ActivityResultHandler resultHandler) {
   this->resultHandler = std::move(resultHandler);

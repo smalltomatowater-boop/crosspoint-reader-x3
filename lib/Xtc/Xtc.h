@@ -84,6 +84,18 @@ class Xtc {
   size_t loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) const;
 
   /**
+   * Load a single plane of an XTH (2-bit) page.
+   */
+  size_t loadPageXthPlane(uint32_t pageIndex, uint8_t planeIndex, uint8_t* buf, size_t bufSize) const;
+
+  /**
+   * Load an XTH (2-bit) page into two separate plane buffers.
+   * Useful when a single contiguous ~100KB allocation fails on a fragmented
+   * heap: two ~50KB allocations are more likely to succeed.
+   */
+  size_t loadPageXthPlanes(uint32_t pageIndex, uint8_t* plane1, uint8_t* plane2, size_t planeBufferSize) const;
+
+  /**
    * Load page with streaming callback
    * @param pageIndex Page index
    * @param callback Callback for each chunk

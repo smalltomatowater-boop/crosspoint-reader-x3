@@ -1,5 +1,6 @@
 #include "ActivityManager.h"
 
+#include <Arduino.h>
 #include <HalPowerManager.h>
 #include <Memory.h>
 
@@ -19,6 +20,7 @@
 #include "settings/SettingsActivity.h"
 #include "terminal/TerminalActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/XtcDebugLog.h"
 
 void ActivityManager::begin() {
   xTaskCreate(&renderTaskTrampoline, "ActivityManagerRender",
@@ -197,7 +199,11 @@ void ActivityManager::goToBrowser() {
 }
 
 void ActivityManager::goToReader(std::string path) {
+  XtcDebugLog::reset();
+  XtcDebugLog::log("ActivityManager::goToReader path=%s largest=%u", path.c_str(),
+                   static_cast<unsigned>(ESP.getMaxAllocHeap()));
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+  XtcDebugLog::log("goToReader: replaceActivity returned");
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {

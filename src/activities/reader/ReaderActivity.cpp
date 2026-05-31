@@ -13,6 +13,7 @@
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
+#include "util/XtcDebugLog.h"
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
@@ -39,16 +40,22 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
 }
 
 std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
+  XtcDebugLog::log("loadXtc path=%s", path.c_str());
   if (!Storage.exists(path.c_str())) {
+    XtcDebugLog::log("loadXtc: file missing");
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
   }
 
   auto xtc = std::unique_ptr<Xtc>(new Xtc(path, "/.crosspoint"));
+  XtcDebugLog::log("Xtc obj created, calling load()");
   if (xtc->load()) {
+    XtcDebugLog::log("Xtc::load OK pages=%u w=%u h=%u depth=%u", xtc->getPageCount(), xtc->getPageWidth(),
+                     xtc->getPageHeight(), xtc->getBitDepth());
     return xtc;
   }
 
+  XtcDebugLog::log("Xtc::load FAILED err=%d", static_cast<int>(xtc->getLastError()));
   LOG_ERR("READER", "Failed to load XTC");
   return nullptr;
 }
@@ -98,23 +105,29 @@ void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
+  XtcDebugLog::log("ReaderActivity::onEnter path=%s", initialBookPath.c_str());
 
   if (initialBookPath.empty()) {
+    XtcDebugLog::log("empty path -> library");
     goToLibrary();  // Start from root when entering via Browse
     return;
   }
 
   sdFontSystem.ensureLoaded(renderer);
+  XtcDebugLog::log("font ensured");
 
   currentBookPath = initialBookPath;
   if (isBmpFile(initialBookPath)) {
     onGoToBmpViewer(initialBookPath);
   } else if (isXtcFile(initialBookPath)) {
+    XtcDebugLog::log("branch=xtc");
     auto xtc = loadXtc(initialBookPath);
     if (!xtc) {
+      XtcDebugLog::log("xtc null -> goBack");
       onGoBack();
       return;
     }
+    XtcDebugLog::log("calling onGoToXtcReader");
     onGoToXtcReader(std::move(xtc));
   } else if (isTxtFile(initialBookPath)) {
     auto txt = loadTxt(initialBookPath);

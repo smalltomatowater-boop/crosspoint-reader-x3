@@ -515,6 +515,20 @@ size_t Xtc::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) con
   return const_cast<xtc::XtcParser*>(parser.get())->loadPage(pageIndex, buffer, bufferSize);
 }
 
+size_t Xtc::loadPageXthPlane(uint32_t pageIndex, uint8_t planeIndex, uint8_t* buf, size_t bufSize) const {
+  if (!loaded || !parser) {
+    return 0;
+  }
+  return const_cast<xtc::XtcParser*>(parser.get())->loadPageXthPlane(pageIndex, planeIndex, buf, bufSize);
+}
+
+size_t Xtc::loadPageXthPlanes(uint32_t pageIndex, uint8_t* plane1, uint8_t* plane2, size_t planeBufferSize) const {
+  if (!loaded || !parser) {
+    return 0;
+  }
+  return const_cast<xtc::XtcParser*>(parser.get())->loadPageXthPlanes(pageIndex, plane1, plane2, planeBufferSize);
+}
+
 xtc::XtcError Xtc::loadPageStreaming(uint32_t pageIndex,
                                      std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
                                      size_t chunkSize) const {

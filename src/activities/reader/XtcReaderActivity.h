@@ -28,6 +28,8 @@ class XtcReaderActivity final : public Activity {
   };
 
   void renderPage();
+  void renderPageXtg(uint16_t pageWidth, uint16_t pageHeight);
+  void renderPageXth(uint16_t pageWidth, uint16_t pageHeight);
   void renderStatusBarOverlay(StatusBarOverlayPosition position) const;
   StatusBarInfo getStatusBarInfo() const;
   void saveProgress() const;

@@ -58,6 +58,30 @@ class XtcParser {
   size_t loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize);
 
   /**
+   * Load a single plane of an XTH (2-bit) page.
+   * Used as a fallback for severely fragmented heaps where neither one big
+   * combined allocation nor two parallel plane allocations fit. The caller
+   * holds one plane in heap and uses the framebuffer as scratch for the
+   * second, re-reading it each pass.
+   *
+   * @param planeIndex 0 for bit-1 plane, 1 for bit-2 plane.
+   */
+  size_t loadPageXthPlane(uint32_t pageIndex, uint8_t planeIndex, uint8_t* buf, size_t bufSize);
+
+  /**
+   * Load XTH (2-bit) page bitmap into two separate plane buffers.
+   * Splitting the ~100 KB combined bitmap into two ~50 KB allocations survives
+   * a fragmented heap that rejects one contiguous large block.
+   *
+   * @param pageIndex Page index (0-based)
+   * @param plane1 Bit-1 plane buffer (at least planeBufferSize bytes)
+   * @param plane2 Bit-2 plane buffer (at least planeBufferSize bytes)
+   * @param planeBufferSize Size of each plane buffer
+   * @return Total bytes read (== 2 * actualPlaneSize) on success, 0 on failure
+   */
+  size_t loadPageXthPlanes(uint32_t pageIndex, uint8_t* plane1, uint8_t* plane2, size_t planeBufferSize);
+
+  /**
    * Streaming page load
    * Memory-efficient method that reads page data in chunks.
    *

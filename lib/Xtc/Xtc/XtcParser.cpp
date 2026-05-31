@@ -72,8 +72,30 @@ XtcError XtcParser::open(const char* filepath) {
     m_author.shrink_to_fit();
   }
 
-  // Cache the entire page table in memory to avoid per-page seek+read
-  // For 33 pages this is ~528 bytes — negligible on 380KB RAM
+  // Validate page table bounds against file size before allocating.
+  // Without this check, a corrupted header (huge pageCount or out-of-range
+  // pageTableOffset) would either OOM on reserve() or fail mid-read after a
+  // partial allocation, leaving the file unopenable.
+  const uint64_t fileSize = m_file.fileSize64();
+  const uint64_t pageTableSize = static_cast<uint64_t>(m_header.pageCount) * sizeof(PageTableEntry);
+  if (m_header.pageTableOffset < XTC_LEGACY_HEADER_SIZE || m_header.pageTableOffset > fileSize ||
+      pageTableSize > fileSize - m_header.pageTableOffset) {
+    LOG_DBG("XTC", "Page table exceeds file bounds: file=%llu offset=%llu size=%llu pages=%u",
+            static_cast<unsigned long long>(fileSize), static_cast<unsigned long long>(m_header.pageTableOffset),
+            static_cast<unsigned long long>(pageTableSize), m_header.pageCount);
+    m_file.close();
+    return XtcError::CORRUPTED_HEADER;
+  }
+
+  // Cache the entire page table in memory to avoid per-page seek+read.
+  // 16 bytes/entry; cap protects ESP32-C3 (380KB DRAM) from runaway allocations
+  // if pageCount slips past readHeader checks via a non-corrupt-but-pathological file.
+  constexpr uint32_t MAX_CACHED_PAGES = 16384;  // 256KB ceiling on page table
+  if (m_header.pageCount > MAX_CACHED_PAGES) {
+    LOG_DBG("XTC", "Page count %u exceeds cache cap %u", m_header.pageCount, MAX_CACHED_PAGES);
+    m_file.close();
+    return XtcError::CORRUPTED_HEADER;
+  }
   m_pageTable.clear();
   m_pageTable.reserve(m_header.pageCount);
   if (!m_file.seek64(m_header.pageTableOffset)) {
@@ -91,6 +113,10 @@ XtcError XtcParser::open(const char* filepath) {
     }
     m_pageTable.push_back(entry);
   }
+  if (m_pageTable.empty()) {
+    m_file.close();
+    return XtcError::CORRUPTED_HEADER;
+  }
   m_defaultWidth = m_pageTable[0].width;
   m_defaultHeight = m_pageTable[0].height;
 
@@ -104,8 +130,12 @@ XtcError XtcParser::open(const char* filepath) {
   m_hasChapters = (m_header.hasChapters == 1 && m_header.pageTableOffset >= sizeof(XtcHeader));
   m_chaptersLoaded = false;
 
-  // Keep file open for fast page reads (cached page table, no reopen needed)
-  // File will be closed in close() or when chapters are loaded (they need the file too)
+  // Close the source file to free SdFat's internal buffers (~4KB on the heap)
+  // before renderers allocate large page bitmaps. XTH pages reach 100KB+ and
+  // mallocs were failing because holding the file kept those buffers resident.
+  // The cached page table still avoids the per-page seek+read; only the file
+  // handle is reopened on demand via ensureFileOpen() inside loadPage().
+  m_file.close();
 
   m_isOpen = true;
   LOG_DBG("XTC", "Opened file: %s (%u pages, %dx%d)", filepath, m_header.pageCount, m_defaultWidth, m_defaultHeight);
@@ -421,6 +451,128 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
 
   m_lastError = XtcError::OK;
   return bytesRead;
+}
+
+size_t XtcParser::loadPageXthPlane(uint32_t pageIndex, uint8_t planeIndex, uint8_t* buf, size_t bufSize) {
+  if (!m_isOpen || m_bitDepth != 2 || planeIndex > 1) {
+    m_lastError = XtcError::INVALID_MAGIC;
+    return 0;
+  }
+  if (pageIndex >= m_header.pageCount) {
+    m_lastError = XtcError::PAGE_OUT_OF_RANGE;
+    return 0;
+  }
+
+  PageInfo page;
+  if (!readPageTableEntry(pageIndex, page)) {
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+
+  if (!ensureFileOpen()) {
+    m_lastError = XtcError::FILE_NOT_FOUND;
+    return 0;
+  }
+
+  if (!m_file.seek64(page.offset)) {
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+
+  XtgPageHeader pageHeader;
+  if (m_file.read(reinterpret_cast<uint8_t*>(&pageHeader), sizeof(XtgPageHeader)) != sizeof(XtgPageHeader) ||
+      pageHeader.magic != XTH_MAGIC) {
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+
+  const size_t planeSize = (static_cast<size_t>(pageHeader.width) * pageHeader.height + 7) / 8;
+  if (bufSize < planeSize) {
+    m_lastError = XtcError::MEMORY_ERROR;
+    return 0;
+  }
+
+  // Skip plane1 when requesting plane2.
+  if (planeIndex == 1 && !m_file.seekCur(static_cast<int64_t>(planeSize))) {
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+
+  if (m_file.read(buf, planeSize) != planeSize) {
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+
+  closeFile();
+  m_lastError = XtcError::OK;
+  return planeSize;
+}
+
+size_t XtcParser::loadPageXthPlanes(uint32_t pageIndex, uint8_t* plane1, uint8_t* plane2, size_t planeBufferSize) {
+  if (!m_isOpen) {
+    m_lastError = XtcError::FILE_NOT_FOUND;
+    return 0;
+  }
+  if (m_bitDepth != 2) {
+    m_lastError = XtcError::INVALID_MAGIC;
+    return 0;
+  }
+  if (pageIndex >= m_header.pageCount) {
+    m_lastError = XtcError::PAGE_OUT_OF_RANGE;
+    return 0;
+  }
+
+  PageInfo page;
+  if (!readPageTableEntry(pageIndex, page)) {
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+
+  if (!ensureFileOpen()) {
+    m_lastError = XtcError::FILE_NOT_FOUND;
+    return 0;
+  }
+
+  if (!m_file.seek64(page.offset)) {
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+
+  XtgPageHeader pageHeader;
+  if (m_file.read(reinterpret_cast<uint8_t*>(&pageHeader), sizeof(XtgPageHeader)) != sizeof(XtgPageHeader)) {
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+  if (pageHeader.magic != XTH_MAGIC) {
+    LOG_DBG("XTC", "loadPageXthPlanes: bad magic 0x%08X", pageHeader.magic);
+    m_lastError = XtcError::INVALID_MAGIC;
+    return 0;
+  }
+
+  const size_t planeSize = (static_cast<size_t>(pageHeader.width) * pageHeader.height + 7) / 8;
+  if (planeBufferSize < planeSize) {
+    LOG_DBG("XTC", "loadPageXthPlanes: buffers too small %u < %u", planeBufferSize, planeSize);
+    m_lastError = XtcError::MEMORY_ERROR;
+    return 0;
+  }
+
+  if (m_file.read(plane1, planeSize) != planeSize) {
+    LOG_DBG("XTC", "loadPageXthPlanes: plane1 read short");
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+  if (m_file.read(plane2, planeSize) != planeSize) {
+    LOG_DBG("XTC", "loadPageXthPlanes: plane2 read short");
+    m_lastError = XtcError::READ_ERROR;
+    return 0;
+  }
+
+  // Close file to free SdFat buffers before the caller starts rendering
+  // (which can allocate further).
+  closeFile();
+
+  m_lastError = XtcError::OK;
+  return planeSize * 2;
 }
 
 XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
