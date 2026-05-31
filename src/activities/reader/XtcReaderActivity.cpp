@@ -279,8 +279,10 @@ void XtcReaderActivity::renderPage() {
       }
     }
     // Skip intermediate BW display — grayscale is the final output
-    if (pagesUntilFullRefresh <= 1) pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
-    else pagesUntilFullRefresh--;
+    if (pagesUntilFullRefresh <= 1)
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    else
+      pagesUntilFullRefresh--;
 
     // Pass 2: LSB - DARK gray only (value 1)
     renderer.clearScreen(0x00);

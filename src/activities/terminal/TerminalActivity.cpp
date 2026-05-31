@@ -109,7 +109,7 @@ void TerminalActivity::drawFrame() {
     renderer.drawText(activeFontId_, midX, midY, "X3 Terminal", true);
     renderer.drawText(
         activeFontId_, midX, midY + charH_,
-        "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e: \xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\xe3\x81\x88\xe3\x81\x8a", true);
+        "\xe9\x81\xb8\xe6\x8a\x9e \xe3\x83\x95\xe3\x82\xa1\xe3\x82\xa4\xe3\x83\xab\xe8\xbb\xa2\xe9\x80\x81", true);
     renderer.drawText(activeFontId_, midX, midY + charH_ * 2, ipLine, true);
     renderer.drawText(activeFontId_, midX, midY + charH_ * 3, fontLine, true);
     return;
