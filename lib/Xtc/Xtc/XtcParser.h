@@ -91,6 +91,10 @@ class XtcParser {
   std::vector<ChapterInfo> m_chapters;
   std::string m_title;
   std::string m_author;
+
+  // Cached page table — read once during open() to avoid per-page seek+read
+  std::vector<PageTableEntry> m_pageTable;
+
   uint16_t m_defaultWidth;
   uint16_t m_defaultHeight;
   uint8_t m_bitDepth;  // 1 = XTC/XTG (1-bit), 2 = XTCH/XTH (2-bit)
@@ -100,7 +104,6 @@ class XtcParser {
 
   // Internal helper functions
   XtcError readHeader();
-  XtcError readFirstPageInfo();
   XtcError readTitle();
   XtcError readAuthor();
   XtcError readChapters();

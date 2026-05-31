@@ -72,14 +72,29 @@ XtcError XtcParser::open(const char* filepath) {
     m_author.shrink_to_fit();
   }
 
-  // Read first page info for default dimensions (no bulk page table allocation)
-  m_lastError = readFirstPageInfo();
-  if (m_lastError != XtcError::OK) {
-    LOG_DBG("XTC", "Failed to read first page info: %s", errorToString(m_lastError));
-    // Explicit close() required: member variable persists beyond function scope
+  // Cache the entire page table in memory to avoid per-page seek+read
+  // For 33 pages this is ~528 bytes — negligible on 380KB RAM
+  m_pageTable.clear();
+  m_pageTable.reserve(m_header.pageCount);
+  if (!m_file.seek64(m_header.pageTableOffset)) {
+    LOG_DBG("XTC", "Failed to seek to page table at %llu", m_header.pageTableOffset);
     m_file.close();
-    return m_lastError;
+    return XtcError::READ_ERROR;
   }
+  for (uint32_t i = 0; i < m_header.pageCount; i++) {
+    PageTableEntry entry;
+    if (m_file.read(reinterpret_cast<uint8_t*>(&entry), sizeof(PageTableEntry)) != sizeof(PageTableEntry)) {
+      LOG_DBG("XTC", "Failed to read page table entry %u", i);
+      m_file.close();
+      m_pageTable.clear();
+      return XtcError::READ_ERROR;
+    }
+    m_pageTable.push_back(entry);
+  }
+  m_defaultWidth = m_pageTable[0].width;
+  m_defaultHeight = m_pageTable[0].height;
+
+  LOG_DBG("XTC", "Page table cached: %u pages, default %dx%d", m_header.pageCount, m_defaultWidth, m_defaultHeight);
 
   // Defer chapter parsing until actually needed (lazy load).
   // Chapter strings can use significant heap; keeping them out of memory
@@ -89,9 +104,8 @@ XtcError XtcParser::open(const char* filepath) {
   m_hasChapters = (m_header.hasChapters == 1 && m_header.pageTableOffset >= sizeof(XtcHeader));
   m_chaptersLoaded = false;
 
-  // Close the source file to free its internal SdFat buffers.
-  // It will be reopened on-demand for page table lookups and bitmap reads.
-  m_file.close();
+  // Keep file open for fast page reads (cached page table, no reopen needed)
+  // File will be closed in close() or when chapters are loaded (they need the file too)
 
   m_isOpen = true;
   LOG_DBG("XTC", "Opened file: %s (%u pages, %dx%d)", filepath, m_header.pageCount, m_defaultWidth, m_defaultHeight);
@@ -103,6 +117,7 @@ void XtcParser::close() {
   m_isOpen = false;
   m_chaptersLoaded = false;
   m_chapters.clear();
+  m_pageTable.clear();
   m_title.clear();
   m_author.clear();
   m_hasChapters = false;
@@ -189,72 +204,13 @@ XtcError XtcParser::readAuthor() {
   return XtcError::OK;
 }
 
-XtcError XtcParser::readFirstPageInfo() {
-  if (m_header.pageTableOffset == 0) {
-    LOG_DBG("XTC", "Page table offset is 0, cannot read");
-    return XtcError::CORRUPTED_HEADER;
-  }
-
-  // Verify the file is large enough to contain the full page table
-  const uint64_t fileSize = m_file.fileSize64();
-  const uint64_t pageTableSize = static_cast<uint64_t>(m_header.pageCount) * sizeof(PageTableEntry);
-  if (m_header.pageTableOffset < XTC_LEGACY_HEADER_SIZE || m_header.pageTableOffset > fileSize ||
-      pageTableSize > fileSize - m_header.pageTableOffset) {
-    LOG_DBG("XTC",
-            "Page table exceeds file bounds: file=%llu tableOffset=%llu tableSize=%llu pages=%u entrySize=%u "
-            "dataOffset=%llu minTableOffset=%llu",
-            static_cast<unsigned long long>(fileSize), static_cast<unsigned long long>(m_header.pageTableOffset),
-            static_cast<unsigned long long>(pageTableSize), m_header.pageCount,
-            static_cast<unsigned int>(sizeof(PageTableEntry)), static_cast<unsigned long long>(m_header.dataOffset),
-            static_cast<unsigned long long>(XTC_LEGACY_HEADER_SIZE));
-    return XtcError::CORRUPTED_HEADER;
-  }
-
-  // Read only the first entry to get default page dimensions
-  // All other entries are read on-demand via readPageTableEntry()
-  // This avoids allocating pageCount * 16 bytes (e.g. 65KB for 4000+ pages)
-  PageTableEntry entry;
-  if (!m_file.seek64(m_header.pageTableOffset)) {
-    LOG_DBG("XTC", "Failed to seek to page table at %llu", m_header.pageTableOffset);
-    return XtcError::READ_ERROR;
-  }
-  size_t bytesRead = m_file.read(reinterpret_cast<uint8_t*>(&entry), sizeof(PageTableEntry));
-  if (bytesRead != sizeof(PageTableEntry)) {
-    LOG_DBG("XTC", "Failed to read first page table entry");
-    return XtcError::READ_ERROR;
-  }
-
-  m_defaultWidth = entry.width;
-  m_defaultHeight = entry.height;
-
-  LOG_DBG("XTC", "Page table validated: %u pages, default %dx%d", m_header.pageCount, m_defaultWidth, m_defaultHeight);
-  return XtcError::OK;
-}
-
 bool XtcParser::readPageTableEntry(uint32_t pageIndex, PageInfo& info) {
-  if (pageIndex >= m_header.pageCount) {
+  if (pageIndex >= m_header.pageCount || m_pageTable.empty()) {
     return false;
   }
 
-  if (!ensureFileOpen()) {
-    LOG_DBG("XTC", "Failed to reopen file for page table read");
-    return false;
-  }
-
-  // Seek to the specific page table entry on the SD card
-  const uint64_t entryOffset = m_header.pageTableOffset + static_cast<uint64_t>(pageIndex) * sizeof(PageTableEntry);
-  if (!m_file.seek64(entryOffset)) {
-    LOG_DBG("XTC", "Failed to seek to page table entry %lu at %llu", pageIndex, entryOffset);
-    return false;
-  }
-
-  PageTableEntry entry;
-  size_t bytesRead = m_file.read(reinterpret_cast<uint8_t*>(&entry), sizeof(PageTableEntry));
-  if (bytesRead != sizeof(PageTableEntry)) {
-    LOG_DBG("XTC", "Failed to read page table entry %lu", pageIndex);
-    return false;
-  }
-
+  // Read from cached page table (no file I/O needed)
+  const PageTableEntry& entry = m_pageTable[pageIndex];
   info.offset = entry.dataOffset;
   info.size = entry.dataSize;
   info.width = entry.width;
