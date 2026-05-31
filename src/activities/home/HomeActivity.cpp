@@ -19,7 +19,6 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/XtcDebugLog.h"
 
 int HomeActivity::getMenuItemCount() const {
   int count = 5;  // File Browser, Recents, File transfer, Terminal, Settings
@@ -274,10 +273,7 @@ void HomeActivity::render(RenderLock&&) {
   }
 }
 
-void HomeActivity::onSelectBook(const std::string& path) {
-  XtcDebugLog::log("HomeActivity::onSelectBook path=%s", path.c_str());
-  activityManager.goToReader(path);
-}
+void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 

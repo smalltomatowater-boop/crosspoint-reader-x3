@@ -37,7 +37,6 @@
 #include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
-#include "util/XtcDebugLog.h"
 
 MappedInputManager mappedInputManager(gpio);
 GfxRenderer renderer(display);
@@ -409,9 +408,6 @@ void setup() {
   }
 
   HalSystem::checkPanic();
-
-  XtcDebugLog::reset();
-  XtcDebugLog::log("BOOT setup() reached storage init OK");
 
   SETTINGS.loadFromFile();
   APP_STATE.loadFromFile();
