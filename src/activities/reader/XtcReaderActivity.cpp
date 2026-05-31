@@ -391,10 +391,8 @@ void XtcReaderActivity::renderPageXth(uint16_t pageWidth, uint16_t pageHeight) {
   }
 
   if (!bothPlanesInHeap && fastPath) {
-    // ---- FALLBACK B: plane1 heap + plane2 via fb, only 2 SD reads ----
-    // Key insight: after computing MSB = p1^p2 in fb, we can derive p2 = p1^fb,
-    // then compute LSB = (~p1)&p2 without re-reading from SD. This halves the
-    // SD reads from 4 to 2 (one for BW base, one for grayscale planes).
+    // ---- FALLBACK B: plane1 heap + plane2 via fb (2 SD reads of p2) ----
+    // LSB is derived from BW already in fb — no extra SD read needed.
     if (!plane1) {
       XtcDebugLog::log("OOM XTH abort");
       renderer.clearScreen();
@@ -402,8 +400,8 @@ void XtcReaderActivity::renderPageXth(uint16_t pageWidth, uint16_t pageHeight) {
       renderer.displayBuffer();
       return;
     }
-    auto loadPlane = [&](uint8_t idx, uint8_t* buf) -> bool {
-      return xtc->loadPageXthPlane(currentPage, idx, buf, planeSize) != 0;
+    auto loadPlane = [&](uint8_t idx, uint8_t* dest) -> bool {
+      return xtc->loadPageXthPlane(currentPage, idx, dest, planeSize) != 0;
     };
     if (!loadPlane(0, plane1.get())) {
       renderer.clearScreen();
@@ -413,7 +411,7 @@ void XtcReaderActivity::renderPageXth(uint16_t pageWidth, uint16_t pageHeight) {
     }
     const uint8_t* p1 = plane1.get();
 
-    // SD read #1: load p2 for BW base display
+    // SD read #1: p2 → fb → BW base = ~(p1|p2)
     if (!loadPlane(1, fb)) return;
     for (size_t i = 0; i < planeSize; i++) fb[i] = ~(p1[i] | fb[i]);
     int interval = SETTINGS.getRefreshFrequency();
@@ -423,13 +421,13 @@ void XtcReaderActivity::renderPageXth(uint16_t pageWidth, uint16_t pageHeight) {
     pagesUntilFullRefresh++;
     XtcDebugLog::log("BW base done");
 
-    // SD read #2: load p2 → LSB first (DTM1 must be written before DTM2)
-    if (!loadPlane(1, fb)) return;
-    for (size_t i = 0; i < planeSize; i++) fb[i] = (~p1[i]) & fb[i];
+    // Derive LSB from BW (no SD read): LSB = ~p1 & p2 = ~p1 & ~BW
+    // fb = BW = ~(p1|p2), so ~fb = p1|p2, and ~p1 & ~fb = ~p1 & p2 = LSB
+    for (size_t i = 0; i < planeSize; i++) fb[i] = ~p1[i] & ~fb[i];
     renderer.copyGrayscaleLsbBuffers();
     XtcDebugLog::log("LSB done");
 
-    // SD read #3: load p2 → MSB
+    // SD read #2: p2 → fb → MSB = p1^p2
     if (!loadPlane(1, fb)) return;
     for (size_t i = 0; i < planeSize; i++) fb[i] = p1[i] ^ fb[i];
     renderer.copyGrayscaleMsbBuffers();
@@ -438,21 +436,8 @@ void XtcReaderActivity::renderPageXth(uint16_t pageWidth, uint16_t pageHeight) {
     renderer.displayGrayBuffer();
     XtcDebugLog::log("gray displayed");
 
-    // BW restore — no SD read needed! Derive from p1 + MSB (still in fb):
-    //   BW = ~(p1 | p2) = ~(p1 | (p1 ^ MSB))
-    //   where fb[i] = MSB = p1[i] ^ p2[i]
+    // BW restore: fb = MSB = p1^p2, so p2 = p1^fb → BW = ~(p1 | (p1^fb))
     for (size_t i = 0; i < planeSize; i++) fb[i] = ~(p1[i] | (p1[i] ^ fb[i]));
-    renderer.cleanupGrayscaleWithFrameBuffer();
-
-    renderer.displayGrayBuffer();
-    XtcDebugLog::log("gray displayed");
-
-    // BW restore: ~(p1 | p2) = ~(p1 | (p1 ^ MSB)). After LSB step, fb = LSB.
-    // p2 = p1 ^ MSB, MSB = p1 ^ LSB? No — derive from p1 + fb (LSB):
-    //   BW = ~(p1 | (p1 ^ (p1 ^ fb))) — hmm, need to track MSB separately.
-    // Simpler: just reload p2 one more time for the BW restore.
-    if (!loadPlane(1, fb)) return;
-    for (size_t i = 0; i < planeSize; i++) fb[i] = ~(p1[i] | fb[i]);
     renderer.cleanupGrayscaleWithFrameBuffer();
 
     XtcDebugLog::log("XTH complete (2-read)");
