@@ -256,8 +256,9 @@ void XtcReaderActivity::renderPageXtg(uint16_t pageWidth, uint16_t pageHeight) {
 
   renderer.clearScreen();
   const size_t rowBytes = (pageWidth + 7) / 8;
+  const uint8_t* bufData = buf.get();
   for (uint16_t y = 0; y < pageHeight; y++) {
-    const uint8_t* row = buf.get() + static_cast<size_t>(y) * rowBytes;
+    const uint8_t* row = bufData + static_cast<size_t>(y) * rowBytes;
     for (uint16_t x = 0; x < pageWidth; x++) {
       const bool isBlack = !((row[x / 8] >> (7 - (x % 8))) & 1);
       if (isBlack) renderer.drawPixel(x, y, true);
@@ -311,7 +312,7 @@ void XtcReaderActivity::renderPageXth(uint16_t pageWidth, uint16_t pageHeight) {
       return;
     }
     const uint8_t* p1 = bothPlanes.get();
-    const uint8_t* p2 = bothPlanes.get() + planeSize;
+    const uint8_t* p2 = p1 + planeSize;
 
     // BW base
     for (size_t i = 0; i < planeSize; i++) fb[i] = ~(p1[i] | p2[i]);
