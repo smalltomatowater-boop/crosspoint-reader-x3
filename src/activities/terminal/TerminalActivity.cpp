@@ -44,9 +44,16 @@ bool TerminalActivity::applyFrame(JsonDocument& doc) {
   JsonArray incoming = doc["rows"].as<JsonArray>();
   if (incoming.isNull()) return false;
 
+  // If server sends more rows than we can display, skip the oldest rows at the
+  // top so the newest output (at the end of the array) is always visible.
+  size_t incomingSize = incoming.size();
+  size_t skip = (incomingSize > maxRows) ? (incomingSize - maxRows) : 0;
+
   std::vector<std::string> next;
   next.reserve(maxRows);
+  size_t idx = 0;
   for (JsonVariant v : incoming) {
+    if (idx++ < skip) continue;
     if ((uint8_t)next.size() >= maxRows) break;
     next.push_back(limitLine(v.as<std::string>(), maxCols));
   }
@@ -54,19 +61,20 @@ bool TerminalActivity::applyFrame(JsonDocument& doc) {
   uint16_t nx = cursorX, ny = cursorY;
   JsonArray cursor = doc["cursor"].as<JsonArray>();
   if (!cursor.isNull() && cursor.size() >= 2) {
-    nx = std::min((uint16_t)(cursor[0] | 0), (uint16_t)(maxCols - 1));
-    ny = std::min((uint16_t)(cursor[1] | 0), (uint16_t)(maxRows - 1));
+    int cy = (cursor[1] | 0) - static_cast<int>(skip);
+    if (cy >= 0 && cy < maxRows) {
+      nx = std::min((uint16_t)(cursor[0] | 0), (uint16_t)(maxCols - 1));
+      ny = static_cast<uint16_t>(cy);
+    }
   }
 
-  bool changed = !frameReceived || rows.size() != next.size();
+  bool changed = !frameReceived || rows.size() != next.size() ||
+                 cursorX != nx || cursorY != ny;
   if (!changed) {
-    for (size_t i = 0; i < next.size(); i++)
-      if (rows[i] != next[i]) {
-        changed = true;
-        break;
-      }
+    for (size_t i = 0; i < next.size(); i++) {
+      if (rows[i] != next[i]) { changed = true; break; }
+    }
   }
-  if (cursorX != nx || cursorY != ny) changed = true;
 
   if (!frameReceived) fullRefreshNeeded = true;
   rows = std::move(next);
@@ -123,9 +131,8 @@ void TerminalActivity::drawFrame() {
 }
 
 void TerminalActivity::render(RenderLock&& lock) {
-  bool doFull = fullRefreshNeeded;
   drawFrame();
-  renderer.displayBuffer(doFull ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
+  renderer.displayBuffer(fullRefreshNeeded ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
   frameDirty = false;
   fullRefreshNeeded = false;
   lastDisplayUpdate = millis();
@@ -213,6 +220,7 @@ void TerminalActivity::handleFontSize() {
   int size = doc["size"] | 10;
   int newFont = UI_10_FONT_ID;
   if (size == 8) newFont = TERM_8_FONT_ID;
+  else if (size == 12) newFont = UI_12_FONT_ID;
 
   if (newFont == TERM_8_FONT_ID && !termFont8_.getEpdFont(0)) {
     server->send(400, "text/plain", "8pt font not loaded\n");
@@ -267,7 +275,6 @@ void TerminalActivity::onEnter() {
     }
   }
 
-  // Default: 10pt (server can switch via POST /fontsize)
   activeFontId_ = UI_10_FONT_ID;
   applyFontMetrics();
 
@@ -280,8 +287,8 @@ void TerminalActivity::onEnter() {
                              if (!result.isCancelled) {
                                startServer();
                                macMiniUrl_ = loadMacMiniUrl();
-                               pendingBleInit_ = true;
-                               bleInitAfter_ = millis() + 1000;
+                               // pendingBleInit_ = true;
+                               // bleInitAfter_ = millis() + 1000;
                              } else {
                                finish();
                              }
@@ -291,8 +298,11 @@ void TerminalActivity::onEnter() {
 
   startServer();
   macMiniUrl_ = loadMacMiniUrl();
-  pendingBleInit_ = true;
-  bleInitAfter_ = millis() + 1000;
+  // BLE disabled: NimBLE consumes ~40KB heap, leaving WebServer unable to
+  // allocate request buffers (MaxAlloc drops to ~2KB). Re-enable once memory
+  // budget allows.
+  // pendingBleInit_ = true;
+  // bleInitAfter_ = millis() + 1000;
 
   fullRefreshNeeded = true;
   frameDirty = true;

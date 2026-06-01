@@ -49,8 +49,8 @@ class TerminalActivity final : public Activity {
   bool fullRefreshNeeded = true;
   unsigned long lastDisplayUpdate = 0;
 
-  static constexpr unsigned long MIN_FULL_REFRESH_MS = 1800;
-  static constexpr unsigned long MIN_FAST_REFRESH_MS = 450;
+  static constexpr unsigned long MIN_FULL_REFRESH_MS = 1500;
+  static constexpr unsigned long MIN_FAST_REFRESH_MS = 150;
 
   static constexpr int TERM_8_FONT_ID = 0x54524D38;  // "TRM8"
   SdCardFont termFont8_;
