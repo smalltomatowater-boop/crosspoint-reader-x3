@@ -100,7 +100,7 @@ void TerminalActivity::applyFontMetrics() {
 
 void TerminalActivity::drawCursor(uint16_t col, uint16_t row) {
   int16_t x = LEFT_MARGIN + col * charW_;
-  int16_t y = TOP_MARGIN + row * charH_;
+  int16_t y = static_cast<int16_t>(displayHeight) - TOP_MARGIN - static_cast<int16_t>((row + 1)) * charH_;
   renderer.drawRect(x, y, charW_, charH_, 1, true);
 }
 
@@ -124,7 +124,7 @@ void TerminalActivity::drawFrame() {
   }
 
   for (size_t row = 0; row < rows.size() && row < maxRows; row++) {
-    int16_t y = TOP_MARGIN + row * charH_;
+    int16_t y = static_cast<int16_t>(displayHeight) - TOP_MARGIN - static_cast<int16_t>((row + 1)) * charH_;
     renderer.drawText(activeFontId_, LEFT_MARGIN, y, rows[row].c_str(), true);
   }
   drawCursor(cursorX, cursorY);
