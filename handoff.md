@@ -1,8 +1,13 @@
 # handoff.md — BLE Text Editor Feature
 
-Status: **in progress** (branch `feature/ble-text-editor`, started 2026-09-24)
-Plan of record: see Claude plan "CrossPoint Text Editor — BLE Keyboard
-Note-Taking Feature" (approved). Milestones M1-M4.
+Status: **M2 complete, uncommitted** (branch `feature/ble-text-editor`, started
+2026-09-24). Plan of record: see Claude plan "CrossPoint Text Editor — BLE
+Keyboard Note-Taking Feature" (approved). Milestones M1-M4.
+
+**Nothing in M2 has been flashed or run on real hardware.** Everything below
+that isn't a host test is reasoned-through-carefully-but-unverified. Treat the
+cursor/viewport/BLE-key-mapping code as the highest-risk area for the next
+session — see "What needs on-device verification" at the bottom.
 
 ## Why this feature (context for future sessions)
 
@@ -35,6 +40,51 @@ disappears — this is the key insight that unblocks the feature.
    the edge), wrap-crossing Left/Right (newline costs one cell), Up/Down by
    display row with goal-column memory, Home/End on display row.
 
+## M2 design decisions (owner hasn't seen these yet — flag, don't assume)
+
+These fill gaps the plan didn't spell out. Reasoned through carefully, but
+they're this session's calls, not pre-approved:
+
+- **Input-mode switching**: Tab cycles Hiragana → Katakana → ASCII (direct,
+  unconverted typing). JIS Katakana/Hiragana/Henkan/Muhenkan usages
+  (~0x87-0x92) are deliberately *not* mapped — couldn't verify their exact
+  assignments without a device (CLAUDE.md anti-hallucination rule), and Tab
+  needs no such knowledge and works on any keyboard. Status row shows the
+  current mode (あ/ア/AA).
+- **HID usage → ASCII table**: only the standard Boot Keyboard range (letters,
+  digits, common punctuation 0x2D-0x38, arrows, Home/End/PgUp/PgDn,
+  Enter/Backspace/Delete/Space/Tab) — high-confidence, well-established USB
+  HID values. No JIS-specific usages at all (see above).
+- **Backspace while composing** (RomajiKana has a pending prefix) discards the
+  whole pending prefix rather than editing it character-by-character. Simpler;
+  matches "keyboard-only cursor, not fine-grained IME editing" spirit of v1.
+- **Display-row layout is computed locally, not indexed globally**: no
+  whole-document line-start table exists anywhere. Cursor Up/Down/Home/End
+  rewrap a small window around the cursor on demand (`EditorActivity::
+  relayout()`, `findPreviousRowStart()` — bounded backward scan, capped at
+  ~4KB, so a single pathologically long line without any `\n` within that
+  window may wrap slightly imprecisely when scrolling up into it). This is
+  what makes "never load the whole file" actually hold for cursor movement,
+  not just for reads.
+- **SaveAs target directory**: always the currently-open file's own folder (or
+  `/` for a never-saved document) — there's no directory picker in v1, just a
+  filename prompt (`KeyboardEntryActivity`, physical-button on-screen
+  keyboard, already existed for this exact "no touchscreen" reason).
+- **Crash-safe save**: SdFat's `rename()` refuses to overwrite an existing
+  destination (`O_CREAT|O_EXCL` internally — see FatFile.cpp:974), so a naive
+  "remove old, rename tmp into place" has a real window where *neither* file
+  exists if power is lost in between. `EditorDocument::consolidateTo()`
+  instead does old→`.bak`, tmp→target, delete `.bak` — recoverable from a
+  crash at any point. This is a *new* pattern for this codebase; the existing
+  `.bak` files elsewhere (`settings.bin.bak` etc.) are one-time
+  bin→json-migration artifacts, not a general atomic-save mechanism — don't
+  assume that convention already existed.
+- **No crash-recovery of unsaved edits**: every `EditorDocument::open()`
+  truncates its scratch `.edit`/`.flat` files fresh, discarding any leftover
+  from a previous crashed session. Explicit `save()` *is* crash-safe (above);
+  the live in-RAM edit buffer between saves is not — same tradeoff every
+  editor without a recovery journal makes.
+
 ## BLE facts (verified 2026-09-23/24)
 
 - `BleKeyboard` lifecycle is sound: component-owned FreeRTOS task (4KB) does
@@ -42,54 +92,159 @@ disappears — this is the key insight that unblocks the feature.
   task; `stop()` joins task + `NimBLEDevice::deinit(false)` returns heap.
   Keep this pattern (TerminalActivity precedent vs docs/activity-manager.md
   task rule — task is joined before onExit returns).
-- Problems being fixed by the `src/ble/BleHidClient.h` extraction:
-  delivers tmux key-name strings (want raw usage+mods `HidKeyEvent`),
-  no JIS keys (Henkan/Muhenkan/Katakana/Eisu intl usages 0x85-0x8A), Alt
-  discarded, US punctuation table bug at 0x31, boot-report-only parsing
-  (report-ID heuristic needed), **no pairing/bonding**.
+- Problems fixed by the `src/ble/BleHidClient.h` extraction (M1): delivers
+  raw usage+mods `HidKeyEvent` (not tmux key-name strings), Alt no longer
+  discarded, US punctuation table bug at 0x31 fixed, boot-report-only parsing
+  (report-ID heuristic), subscribe-failure surfaced instead of a retry loop.
+  Still **no pairing/bonding** (v1 scope) and no JIS usage mapping (M2 punted
+  on this deliberately — see design decisions above).
 - **v1 pairing = unencrypted connections, documented.** Keyboards requiring
   encryption fail the 2A4D subscribe → surface in status, don't retry-loop.
   v2 path exists in vendored NimBLE-Arduino 2.5.0:
   `NimBLEDevice::setSecurityAuth` (NimBLEDevice.h:148),
   `NimBLEClient::secureConnection()` (NimBLEClient.h:72), bond address in
   `/.crosspoint/ble_keyboard.json` (WifiCredentialStore pattern).
+- `BleHidClient::discardPending()` exists precisely for the push-sub-activity
+  case (menu/file-picker/keyboard-entry on top of the editor) — EditorActivity
+  calls it before *and* after every such push so stray keystrokes typed while
+  a sub-activity had focus never land in the document.
 - Existing repo has NO partial-refresh usage; `displayWindow()` takes
   physical un-rotated coords (GfxRenderer.cpp:1144) — use full-screen
   FAST_REFRESH differential (TerminalActivity 150ms rate-limit pattern).
 - Fonts: MIGU1M_TERM_08 loaded from flash via `renderer.replaceFont`
   (TerminalActivity.cpp:269-276) — Japanese-capable monospace precedent.
+  Confirmed (TerminalActivity's own IP screen) that `drawText` handles mixed
+  ASCII/kana-width UTF-8 correctly in one call — the editor's per-row
+  rendering relies on this rather than drawing cell-by-cell.
 
-## Heap budget (rule: >50KB headroom at all times)
+## Heap budget (rule: >50KB headroom at all times) — **not yet measured on device**
 
 NimBLE ~40KB + editor ~40KB (pieces 18KB reserved, edit head 8KB, windows
-4KB, chunk table ≤3KB, misc) ≈ 80-87KB total. Font data stays in flash.
-Measure baseline on device (LOG_DBG "MEM") in M1; verify exit returns heap.
+4KB, misc) ≈ 78-85KB total. Font data stays in flash. The "chunk table ≤3KB"
+line item from the original plan was dropped: `PieceTable`'s array is capped
+at 1536 pieces (~18KB) and a linear scan of that is trivially fast at 160MHz
+(sub-millisecond even in the worst case), so no secondary index was needed —
+see PieceTable.h's class comment. Actual RAM impact of `EditorActivity` (the
+4KB `viewportBuf_` plus the ~18.4KB `PieceTable` array live inside it,
+heap-allocated only while the activity is current) has **not been measured
+on device yet** — do that first in the next session (`LOG_DBG "MEM"` before/
+after `onEnter`/`onExit`, and again after opening a large file).
 
 ## Research conclusions (don't redo)
 
 - BLE HID host libraries: all popular ESP32 ones are device-side (wrong
   direction); esp32beans demo-level. → self-refactor of BleKeyboard.
 - arduino_skk (Uno R3 + SD SKK dict): **no license** — not usable as a code
-  dependency. Romaji→kana = own constexpr flash table + FSM (~140 rules);
-  romaji algorithm refs: zenn.dev「SKK実装入門」. For v2 kanji, SD-based SKK
-  dict approach remains the candidate (reimplement, don't copy).
+  dependency. Romaji→kana = own constexpr flash table + FSM (~150 rules,
+  built and host-tested). For v2 kanji, SD-based SKK dict approach remains
+  the candidate (reimplement, don't copy).
+- SdFat `rename()` cannot overwrite an existing destination — see the
+  crash-safe-save design decision above. Anyone touching save/flatten logic
+  needs to know this before "simplifying" it.
 
-## Where things live (M1 outcome, update as built)
+## Where things live (M2 outcome, update as built)
 
-- `src/ble/BleHidClient.h/.cpp` — reusable NimBLE HID client (HidKeyEvent).
+- `src/ble/BleHidClient.h/.cpp` — reusable NimBLE HID client (HidKeyEvent). M1.
 - `src/activities/terminal/BleKeyboard.*` — thin adapter over BleHidClient,
-  same public API (TerminalActivity untouched).
-- `src/activities/editor/EditorActivity.h/.cpp` — the editor.
-- `lib/Editor/EditorDocument.*` — piece table + SD stores.
-- `lib/Editor/RomajiKana.*` — pure C++, host-testable (test/romaji_kana).
-- `src/activities/util/OptionMenuActivity.*` — generic button chooser.
-- Modified: ActivityManager (HomeMenuItem::EDITOR, goToEditor), HomeActivity
-  (6th menu item), FileBrowserActivity (PickTextFile mode + long-press
-  menu), i18n yamls (~15 keys).
+  same public API (TerminalActivity untouched). M1.
+- `lib/Editor/RomajiKana.h/.cpp` — romaji→kana FSM. Host-tested, 15 cases
+  green (`test/romaji_kana/RomajiKanaTest.cpp`). M1/M2.
+- `lib/Editor/PieceTable.h/.cpp` — storage-agnostic piece-table index (the
+  actual "never load the whole file" data structure). Pure logic, zero I/O —
+  deliberately factored out of `EditorDocument` specifically so this, the
+  fiddliest part, is host-testable without SD hardware. Host-tested, 19
+  cases green including a 500-step randomized fuzz test against a
+  `std::string` reference (`test/piece_table/PieceTableTest.cpp`). Known,
+  documented, unavoidable limitation: "type a char, backspace it, retype"
+  splices a second piece instead of re-extending the first, because the
+  backing Edit stream is append-only (see the class comment on `insert()`) —
+  content is still correct, piece count is just one above the theoretical
+  minimum in that one case.
+- `lib/Editor/EditorDocument.h/.cpp` — thin SD-I/O glue around `PieceTable`:
+  owns the Base (original file, or last flatten/save snapshot) and Edit
+  (append-only) file handles plus an 8KB in-RAM write-combining head.
+  Crash-safe `save()`/`flatten()` via `consolidateTo()`'s backup-rotate
+  rename swap (see design decisions above). **Not host-testable** — depends
+  on `HalFile`, which can't be constructed off-device — so this file's
+  correctness rests on careful reading plus `pio run`/`pio check` passing
+  clean, not on an executed test. Verify on device before trusting it with
+  real notes.
+- `src/activities/editor/EditorActivity.h/.cpp` — the editor. M1's grid/BLE
+  skeleton now wired to real content: BLE keys → HID-usage-to-ASCII table →
+  RomajiKana → `EditorDocument`, keyboard-only cursor (arrows/Home/End/PgUp/
+  PgDn/Backspace/Delete/Enter), viewport-follow scrolling computed on demand
+  (no whole-document index — see design decisions above), Tab-cycled input
+  mode, idle-triggered `flushEditHead()`/`flatten()` (2s idle debounce), and
+  the Confirm-button Save/SaveAs/Open/New/Exit menu with unsaved-changes
+  confirmation on Open/New/Exit-while-dirty. **This is the least-verified
+  file in the feature** — see "What needs on-device verification" below.
+- `src/activities/util/OptionMenuActivity.h/.cpp` — generic vertical list
+  chooser (title + list of (label, action-id), returns `MenuResult` or
+  cancelled). Built on the same `GUI.drawList`/`ButtonNavigator` primitives
+  every other simple picker activity in this codebase already uses (e.g.
+  `NetworkModeSelectionActivity`) — not a new UI pattern, just the first
+  *reusable* instance of one that already existed many times over.
+- FileBrowser: `Mode::PickTextFile` (mirrors the existing `PickFirmware`
+  pattern — filters to `.txt`/`.md`, returns the path via `FilePathResult`,
+  Back-at-root cancels instead of going Home). Long-press on a `.txt`/`.md`
+  file in `Mode::Books` now opens an `OptionMenuActivity` (Read/Edit/Delete)
+  instead of going straight to the delete confirmation — every other
+  file/directory type's long-press behavior is unchanged. "Read" reuses the
+  pre-existing `onSelectBook()` routing (there's already a dedicated
+  `TxtReaderActivity` for plain-text books, untouched by any of this).
+- i18n: `STR_EDITOR_MENU/SAVE/SAVE_AS/NEW_FILE/READ/EDIT/SELECT_TEXT_FILE/
+  NO_TEXT_FILES/UNSAVED_CHANGES/DISCARD_CHANGES_BODY/UNTITLED/
+  ENTER_FILENAME/SAVED/SAVE_FAILED` added to both `english.yaml` and
+  `japanese.yaml`, generated files regenerated via `scripts/gen_i18n.py`.
+  `SAVED`/`SAVE_FAILED` keys exist but aren't rendered anywhere yet (no
+  transient status-message UI was built) — either wire them up or remove
+  them before this ships.
+- Modified in M1 (unchanged since): ActivityManager (`HomeMenuItem::EDITOR`,
+  `goToEditor`), HomeActivity (6th menu item).
 
 ## Verification gates
 
-`pio run` (default + gh_release), `pio check`, clang-format clean, romaji
-ctest green on host BEFORE flashing. On device: heap before/after BLE, BLE
-connect + JIS keys in logs, save/reload roundtrip, orientation restore,
-cursor rules, ghosting. Human tester = owner.
+`pio run` (default + gh_release) — **passing**. `pio check` — **passing**
+(cppcheck clean except one deliberately-left low-severity style nit, see
+`EditorActivity.cpp`'s `hidUsageToAscii`). clang-format — **clean**. Host
+tests (`cmake --build test/build && ctest` or run the two test binaries
+directly) — **34/34 green** (15 RomajiKana + 19 PieceTable, including the
+randomized fuzz test).
+
+**Everything below this line still needs a real device and a real BLE
+keyboard — none of it has been exercised:**
+
+## What needs on-device verification (do this first, in this order)
+
+1. Heap: `LOG_DBG "MEM"` before/after `onEnter`/`onExit`, and again after
+   opening a several-KB file — confirm the >50KB headroom rule holds and
+   `onExit()` actually returns the heap (BLE stop + document close).
+2. BLE connect + the HID usage table: type the alphabet, digits, and every
+   punctuation key in ASCII mode; confirm each lands as the right character.
+   This table was written from memory of the USB HID Boot Keyboard spec, not
+   copied from a verified source — it's the single highest-confidence-but-
+   unverified piece of this session's work.
+3. Romaji→kana in Hiragana/Katakana mode, Tab cycling, a few of the trickier
+   RomajiKana cases live (sokuon, "n" before a consonant, "n'") — the FSM
+   itself is host-tested, but *feeding it from real BLE key events through
+   the ASCII table* is not.
+4. Cursor movement: arrows across a wrapped line, across a real newline,
+   Up/Down through lines of different lengths (goal-column memory), Home/
+   End, PageUp/PageDown, and specifically scrolling *up* past the top of the
+   viewport (the bounded-backward-scan path, `findPreviousRowStart()`) — this
+   is the least-traced-by-hand piece of logic in the whole feature.
+5. Save / Save As / Open / New, including the discard-unsaved-changes
+   confirmation, and — critically — a save that's interrupted by yanking
+   power (or at least reasoning about it again with the device's actual SD
+   card behavior in hand) to sanity-check the `.bak` rotation.
+6. Orientation restore on exit, ghosting/refresh behavior over a longer
+   editing session, ~80-column rendering at the real font metrics (`maxCols_`/
+   `maxRows_` are computed from `renderer.getTextWidth`/`getLineHeight` at
+   runtime, not hardcoded, but were never checked against the real display).
+
+## Not started (M3/M4)
+
+- Kanji conversion (SKK-style, v2 — the `commit` seam for it is
+  `EditorActivity`'s `insertText()`/`commitPendingKana()`, untouched by any
+  future SKK layer per requirement #3).
+- Anything else in the original plan not called out as done above.

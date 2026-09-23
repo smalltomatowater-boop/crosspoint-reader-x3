@@ -7,10 +7,12 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <variant>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "activities/util/ConfirmationActivity.h"
+#include "activities/util/OptionMenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
@@ -50,6 +52,11 @@ void FileBrowserActivity::loadFiles() {
       if (mode == Mode::PickFirmware) {
         // Firmware picker: only show .bin files.
         if (FsHelpers::checkFileExtension(filename, ".bin")) {
+          files.emplace_back(filename);
+        }
+      } else if (mode == Mode::PickTextFile) {
+        // Text file picker (editor's Open menu): only show .txt/.md files.
+        if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {
           files.emplace_back(filename);
         }
       } else if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
@@ -186,6 +193,64 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
   return true;
 }
 
+void FileBrowserActivity::confirmDelete(const std::string& fullPath, const std::string& displayName) {
+  auto handler = [this, fullPath](const ActivityResult& res) {
+    if (!res.isCancelled) {
+      LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
+      if (removeDirFile(fullPath)) {
+        LOG_DBG("FileBrowser", "Deleted successfully");
+        loadFiles();
+        if (files.empty()) {
+          selectorIndex = 0;
+        } else if (selectorIndex >= files.size()) {
+          // Move selection to the new "last" item
+          selectorIndex = files.size() - 1;
+        }
+
+        requestUpdate(true);
+      } else {
+        LOG_ERR("FileBrowser", "Failed to delete: %s", fullPath.c_str());
+      }
+    } else {
+      LOG_DBG("FileBrowser", "Delete cancelled by user");
+    }
+  };
+
+  std::string heading = tr(STR_DELETE) + std::string("? ");
+  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, displayName), handler);
+}
+
+void FileBrowserActivity::showTextFileMenu(const std::string& fullPath, const std::string& displayName) {
+  enum class TextFileAction { Read, Edit, Delete };
+
+  std::vector<OptionMenuActivity::Option> options = {
+      {tr(STR_READ), static_cast<int>(TextFileAction::Read)},
+      {tr(STR_EDIT), static_cast<int>(TextFileAction::Edit)},
+      {tr(STR_DELETE), static_cast<int>(TextFileAction::Delete)},
+  };
+
+  auto handler = [this, fullPath, displayName](const ActivityResult& res) {
+    if (res.isCancelled) return;
+    const auto* menuResult = std::get_if<MenuResult>(&res.data);
+    if (!menuResult) return;
+
+    switch (static_cast<TextFileAction>(menuResult->action)) {
+      case TextFileAction::Read:
+        onSelectBook(fullPath);
+        break;
+      case TextFileAction::Edit:
+        activityManager.goToEditor(fullPath);
+        break;
+      case TextFileAction::Delete:
+        confirmDelete(fullPath, displayName);
+        break;
+    }
+  };
+
+  startActivityForResult(std::make_unique<OptionMenuActivity>(renderer, mappedInput, displayName, std::move(options)),
+                         handler);
+}
+
 void FileBrowserActivity::loop() {
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
@@ -216,8 +281,8 @@ void FileBrowserActivity::loop() {
     const std::string& entry = files[selectorIndex];
     bool isDirectory = (entry.back() == '/');
 
-    // Firmware picker: select file -> return path; navigate into directories normally.
-    if (mode == Mode::PickFirmware && !isDirectory) {
+    // File pickers (firmware/text): select file -> return path; navigate into directories normally.
+    if ((mode == Mode::PickFirmware || mode == Mode::PickTextFile) && !isDirectory) {
       std::string cleanBasePath = basepath;
       if (cleanBasePath.back() != '/') cleanBasePath += "/";
       ActivityResult res{FilePathResult{cleanBasePath + entry}};
@@ -228,36 +293,17 @@ void FileBrowserActivity::loop() {
     }
 
     if (mode == Mode::Books && mappedInput.getHeldTime() >= GO_HOME_MS) {
-      // --- LONG PRESS ACTION: DELETE FILE OR DIRECTORY ---
       std::string cleanBasePath = basepath;
       if (cleanBasePath.back() != '/') cleanBasePath += "/";
       const std::string fullPath = cleanBasePath + entry;
 
-      auto handler = [this, fullPath](const ActivityResult& res) {
-        if (!res.isCancelled) {
-          LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
-          if (removeDirFile(fullPath)) {
-            LOG_DBG("FileBrowser", "Deleted successfully");
-            loadFiles();
-            if (files.empty()) {
-              selectorIndex = 0;
-            } else if (selectorIndex >= files.size()) {
-              // Move selection to the new "last" item
-              selectorIndex = files.size() - 1;
-            }
-
-            requestUpdate(true);
-          } else {
-            LOG_ERR("FileBrowser", "Failed to delete: %s", fullPath.c_str());
-          }
-        } else {
-          LOG_DBG("FileBrowser", "Delete cancelled by user");
-        }
-      };
-
-      std::string heading = tr(STR_DELETE) + std::string("? ");
-
-      startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, entry), handler);
+      if (!isDirectory && (FsHelpers::hasTxtExtension(entry) || FsHelpers::hasMarkdownExtension(entry))) {
+        // --- LONG PRESS ON A TEXT FILE: Read / Edit / Delete chooser ---
+        showTextFileMenu(fullPath, entry);
+      } else {
+        // --- LONG PRESS ACTION: DELETE FILE OR DIRECTORY ---
+        confirmDelete(fullPath, entry);
+      }
       return;
     } else {
       // --- SHORT PRESS ACTION: OPEN/NAVIGATE ---
@@ -290,8 +336,8 @@ void FileBrowserActivity::loop() {
         selectorIndex = findEntry(dirName);
 
         requestUpdate();
-      } else if (mode == Mode::PickFirmware) {
-        // Firmware picker at root: cancel back to caller instead of going home.
+      } else if (mode == Mode::PickFirmware || mode == Mode::PickTextFile) {
+        // File pickers at root: cancel back to caller instead of going home.
         ActivityResult res;
         res.isCancelled = true;
         setResult(std::move(res));
@@ -352,8 +398,9 @@ void FileBrowserActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
 
   std::string folderName =
-      (mode == Mode::PickFirmware)
-          ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
+      (mode == Mode::PickFirmware) ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
+      : (mode == Mode::PickTextFile)
+          ? std::string(tr(STR_SELECT_TEXT_FILE))
           : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
 
@@ -363,7 +410,9 @@ void FileBrowserActivity::render(RenderLock&&) {
   const int contentHeight =
       pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
   if (files.empty()) {
-    const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
+    const char* emptyMsg = (mode == Mode::PickFirmware)   ? tr(STR_NO_BIN_FILES)
+                           : (mode == Mode::PickTextFile) ? tr(STR_NO_TEXT_FILES)
+                                                          : tr(STR_NO_FILES_FOUND);
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
   } else {
     GUI.drawList(
@@ -401,11 +450,12 @@ void FileBrowserActivity::render(RenderLock&&) {
   }
 
   // Help text
-  const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
-  // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
+  const bool isPickerMode = mode == Mode::PickFirmware || mode == Mode::PickTextFile;
+  const char* backLabel = (basepath == "/") ? (isPickerMode ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
+  // In a picker mode, Confirm on a file returns its path to the caller (not "open"); show
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
-  const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && files[selectorIndex].back() != '/';
-  const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
+  const bool selectingPickerFile = isPickerMode && !files.empty() && files[selectorIndex].back() != '/';
+  const char* confirmLabel = files.empty() ? "" : (selectingPickerFile ? tr(STR_SELECT) : tr(STR_OPEN));
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
                                             files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

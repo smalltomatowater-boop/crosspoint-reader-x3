@@ -12,11 +12,15 @@
 class FileBrowserActivity final : public Activity {
  public:
   // Books = standard reader browser; PickFirmware = filter to .bin only and return path via ActivityResult.
-  enum class Mode { Books, PickFirmware };
+  // PickTextFile = filter to .txt/.md only and return path via ActivityResult (used by the editor's Open menu).
+  enum class Mode { Books, PickFirmware, PickTextFile };
 
  private:
   // Deletion
   bool removeDirFile(const std::string& fullPath);
+  void confirmDelete(const std::string& fullPath, const std::string& displayName);
+  // Long-press on a .txt/.md file in Books mode: Read / Edit / Delete chooser.
+  void showTextFileMenu(const std::string& fullPath, const std::string& displayName);
 
   ButtonNavigator buttonNavigator;
 
