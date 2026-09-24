@@ -1,3 +1,4 @@
 [submodule "open-x4-sdk"]
 	path = open-x4-sdk
-	url = https://github.com/crosspoint-reader/community-sdk.git
+	url = https://github.com/smalltomatowater-boop/community-sdk.git
+	branch = x3-partial-window
