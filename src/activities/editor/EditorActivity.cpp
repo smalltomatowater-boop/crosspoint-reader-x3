@@ -4,6 +4,7 @@
 #include <FsHelpers.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Utf8.h>
 #include <string.h>
 
@@ -11,6 +12,7 @@
 #include <variant>
 #include <vector>
 
+#include "KanaConverter.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -28,6 +30,7 @@ namespace {
 // cycles Hiragana -> Katakana -> ASCII input mode, which needs no JIS-specific
 // knowledge and works on any keyboard.
 constexpr uint8_t HID_ENTER = 0x28;
+constexpr uint8_t HID_ESCAPE = 0x29;
 constexpr uint8_t HID_BACKSPACE = 0x2A;
 constexpr uint8_t HID_TAB = 0x2B;
 constexpr uint8_t HID_SPACE = 0x2C;
@@ -153,6 +156,17 @@ void EditorActivity::onEnter() {
   goalCol_ = 0;
   relayout();
 
+  const bool dictExists = Storage.exists(DICT_PATH);
+  if (dictExists) {
+    dictFile_ = Storage.open(DICT_PATH, O_READ);
+    if (dictFile_) {
+      dict_ =
+          makeUniqueNoThrow<SkkDictionary>(ByteSource{this, static_cast<uint32_t>(dictFile_.fileSize()), readDictFile});
+    }
+  }
+  LOG_INF("EDTR", "Kanji dictionary %s (%s: exists=%d open=%d size=%u)", dict_ ? "loaded" : "not available", DICT_PATH,
+          dictExists, static_cast<bool>(dictFile_), dictFile_ ? static_cast<unsigned>(dictFile_.fileSize()) : 0u);
+
   // BLE keyboard: connect at startup. The editor never touches WiFi, so
   // NimBLE's ~40KB heap cost does not collide with the WebServer problem
   // that disabled BLE in TerminalActivity.
@@ -168,6 +182,8 @@ void EditorActivity::onExit() {
   // Join the BLE task BEFORE activity destruction (component-owned task,
   // joined here per the BleHidClient contract).
   bleHid_.stop();
+  dict_.reset();
+  if (dictFile_) dictFile_.close();
   document_.close();
   renderer.setOrientation(savedOrientation_);
   Activity::onExit();
@@ -203,7 +219,7 @@ void EditorActivity::bleEventTrampoline(void* ctx, const HidKeyEvent& ev) {
 }
 
 void EditorActivity::cycleInputMode() {
-  commitPendingKana();
+  commitComposition();
   switch (inputMode_) {
     case InputMode::Hiragana:
       inputMode_ = InputMode::Katakana;
@@ -222,7 +238,66 @@ void EditorActivity::cycleInputMode() {
 void EditorActivity::commitPendingKana() {
   if (!romajiKana_.hasPending()) return;
   const std::string text = romajiKana_.flushPending();
-  if (!text.empty()) insertText(text);
+  if (!text.empty()) insertKana(text);
+}
+
+void EditorActivity::insertKana(const std::string& kana) {
+  if (kana.empty()) return;
+  if (inputMode_ == InputMode::Hiragana && compose_ == ComposeState::None) {
+    compStart_ = cursorPos_;
+    compose_ = ComposeState::Composing;
+  }
+  insertText(kana);
+}
+
+void EditorActivity::commitComposition() {
+  commitPendingKana();
+  compose_ = ComposeState::None;
+  compReading_.clear();
+  candidates_.clear();
+  candIndex_ = 0;
+}
+
+void EditorActivity::replaceComposition(const std::string& text) {
+  document_.deleteAt(compStart_, cursorPos_ - compStart_);
+  cursorPos_ = compStart_;
+  insertText(text);
+}
+
+void EditorActivity::revertConversion() {
+  replaceComposition(compReading_);
+  compose_ = ComposeState::Composing;
+  candidates_.clear();
+  candIndex_ = 0;
+}
+
+void EditorActivity::convertStep(int dir) {
+  if (compose_ != ComposeState::Converting) {
+    commitPendingKana();  // a trailing "n" becomes ん and joins the composition
+    if (compose_ != ComposeState::Composing || cursorPos_ <= compStart_) {
+      compose_ = ComposeState::None;
+      return;
+    }
+    const uint32_t len = cursorPos_ - compStart_;
+    if (len > MAX_READING_BYTES) return;  // too long to be one word; leave it as typed
+    compReading_.assign(len, '\0');
+    compReading_.resize(document_.readAt(compStart_, compReading_.data(), len));
+    candidates_ = buildConversionCandidates(dict_.get(), compReading_);
+    if (candidates_.empty()) return;
+    candIndex_ = 0;
+    compose_ = ComposeState::Converting;
+  } else {
+    const size_t n = candidates_.size();
+    candIndex_ = dir > 0 ? (candIndex_ + 1) % n : (candIndex_ + n - 1) % n;
+  }
+  replaceComposition(candidates_[candIndex_]);
+}
+
+uint32_t EditorActivity::readDictFile(void* ctx, uint32_t pos, char* buf, uint32_t n) {
+  auto* self = static_cast<EditorActivity*>(ctx);
+  if (!self->dictFile_.seek(pos)) return 0;
+  const int got = self->dictFile_.read(buf, n);
+  return got > 0 ? static_cast<uint32_t>(got) : 0;
 }
 
 void EditorActivity::insertText(const std::string& text) {
@@ -246,25 +321,54 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
       frameDirty_ = true;
       return;
 
-    case HID_ENTER:
-      commitPendingKana();
-      insertText("\n");
+    case HID_ENTER: {
+      // In a composition, Enter confirms it (like any IME); otherwise newline.
+      const bool confirming = compose_ != ComposeState::None || romajiKana_.hasPending();
+      commitComposition();
+      if (!confirming || inputMode_ != InputMode::Hiragana) insertText("\n");
+      contentChanged = true;
+      break;
+    }
+
+    case HID_ESCAPE:
+      romajiKana_.clear();
+      if (compose_ == ComposeState::Converting) {
+        revertConversion();
+      } else if (compose_ == ComposeState::Composing) {
+        document_.deleteAt(compStart_, cursorPos_ - compStart_);
+        cursorPos_ = compStart_;
+        compose_ = ComposeState::None;
+      }
+      contentChanged = true;
+      break;
+
+    case HID_SPACE:
+      if (inputMode_ == InputMode::Hiragana && (compose_ != ComposeState::None || romajiKana_.hasPending())) {
+        convertStep(hasShift(ev.mods) ? -1 : 1);
+      } else {
+        commitComposition();
+        insertText(" ");
+      }
       contentChanged = true;
       break;
 
     case HID_BACKSPACE:
-      if (romajiKana_.hasPending()) {
+      if (compose_ == ComposeState::Converting) {
+        revertConversion();
+        contentChanged = true;
+      } else if (romajiKana_.hasPending()) {
         romajiKana_.clear();
       } else if (cursorPos_ > 0) {
         const uint32_t len = prevCodepointLen(cursorPos_);
         document_.deleteAt(cursorPos_ - len, len);
         cursorPos_ -= len;
+        if (compose_ == ComposeState::Composing && cursorPos_ <= compStart_) compose_ = ComposeState::None;
         contentChanged = true;
       }
       break;
 
     case HID_DELETE:
-      commitPendingKana();
+      commitComposition();
       if (cursorPos_ < document_.length()) {
         const uint32_t len = nextCodepointLen(cursorPos_);
         document_.deleteAt(cursorPos_, len);
@@ -273,49 +377,49 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
       break;
 
     case HID_LEFT:
-      commitPendingKana();
+      commitComposition();
       if (cursorPos_ > 0) cursorPos_ -= prevCodepointLen(cursorPos_);
       cursorMoved = true;
       break;
 
     case HID_RIGHT:
-      commitPendingKana();
+      commitComposition();
       if (cursorPos_ < document_.length()) cursorPos_ += nextCodepointLen(cursorPos_);
       cursorMoved = true;
       break;
 
     case HID_UP:
-      commitPendingKana();
+      commitComposition();
       moveCursorVertically(-1);
       cursorMoved = true;
       break;
 
     case HID_DOWN:
-      commitPendingKana();
+      commitComposition();
       moveCursorVertically(1);
       cursorMoved = true;
       break;
 
     case HID_PAGE_UP:
-      commitPendingKana();
+      commitComposition();
       moveCursorVertically(-static_cast<int>(maxRows_));
       cursorMoved = true;
       break;
 
     case HID_PAGE_DOWN:
-      commitPendingKana();
+      commitComposition();
       moveCursorVertically(static_cast<int>(maxRows_));
       cursorMoved = true;
       break;
 
     case HID_HOME:
-      commitPendingKana();
+      commitComposition();
       moveCursorToRowEdge(/*toStart=*/true);
       cursorMoved = true;
       break;
 
     case HID_END:
-      commitPendingKana();
+      commitComposition();
       moveCursorToRowEdge(/*toStart=*/false);
       cursorMoved = true;
       break;
@@ -326,13 +430,15 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
         const bool romajiEligible =
             inputMode_ != InputMode::Ascii && ((ch >= 'a' && ch <= 'z') || ch == '\'' || ch == '-');
         if (romajiEligible) {
+          // Typing while a candidate is shown confirms it and starts a new word.
+          if (compose_ == ComposeState::Converting) commitComposition();
           const std::string kana = romajiKana_.feed(ch);
           if (!kana.empty()) {
-            insertText(kana);
+            insertKana(kana);
             contentChanged = true;
           }
         } else {
-          commitPendingKana();
+          commitComposition();
           insertText(inputMode_ != InputMode::Ascii ? kanaModeSymbol(ch) : std::string(1, ch));
           contentChanged = true;
         }
@@ -359,13 +465,18 @@ void EditorActivity::loop() {
   // only poll wasReleased/isPressed.
   bleHid_.loop();
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    showEditorMenu();
-    return;
-  }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    requestExit();
+  const bool menuPressed = mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+  const bool backPressed = mappedInput.wasReleased(MappedInputManager::Button::Back);
+  if (menuPressed || backPressed) {
+    // Anything mid-composition is confirmed as shown before leaving the text.
+    commitComposition();
+    relayout();
+    ensureCursorVisible();
+    if (menuPressed) {
+      showEditorMenu();
+    } else {
+      requestExit();
+    }
     return;
   }
 
@@ -752,6 +863,8 @@ void EditorActivity::switchToDocument(const std::string& newPath) {
   viewportStart_ = 0;
   goalCol_ = 0;
   romajiKana_.clear();
+  compose_ = ComposeState::None;
+  candidates_.clear();
   relayout();
   fullRefreshNeeded_ = true;
   frameDirty_ = true;
@@ -817,10 +930,22 @@ void EditorActivity::requestExit() {
 void EditorActivity::drawStatusRow() {
   const int y = TOP_MARGIN + static_cast<int>(maxRows_) * charH_;
 
-  char left[64];
-  const std::string name =
-      filePath_.empty() ? std::string(tr(STR_UNTITLED)) : filePath_.substr(filePath_.find_last_of('/') + 1);
-  snprintf(left, sizeof(left), "%s%s", document_.isDirty() ? "*" : "", name.c_str());
+  char left[128];
+  if (compose_ == ComposeState::Converting) {
+    // "[3/12] 各 角 画 ..." — the current candidate and as many following ones
+    // as fit; the status row doubles as the candidate list.
+    int n = snprintf(left, sizeof(left), "%s[%u/%u]", dict_ ? "" : tr(STR_DICT_MISSING),
+                     static_cast<unsigned>(candIndex_ + 1), static_cast<unsigned>(candidates_.size()));
+    for (size_t i = 0; i < candidates_.size() && n > 0 && n < static_cast<int>(sizeof(left)); ++i) {
+      const std::string& c = candidates_[(candIndex_ + i) % candidates_.size()];
+      if (n + 1 + c.size() + 1 > sizeof(left)) break;
+      n += snprintf(left + n, sizeof(left) - n, " %s", c.c_str());
+    }
+  } else {
+    const std::string name =
+        filePath_.empty() ? std::string(tr(STR_UNTITLED)) : filePath_.substr(filePath_.find_last_of('/') + 1);
+    snprintf(left, sizeof(left), "%s%s", document_.isDirty() ? "*" : "", name.c_str());
+  }
 
   const char* modeStr = (inputMode_ == InputMode::Hiragana)   ? "\xe3\x81\x82"  // あ
                         : (inputMode_ == InputMode::Katakana) ? "\xe3\x82\xa2"  // ア
@@ -866,16 +991,31 @@ void EditorActivity::render(RenderLock&& lock) {
     const int y = TOP_MARGIN + static_cast<int>(r) * charH_;
     renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, y, rowBuf, true);
 
-    if (showCursor && r == cursorRow_) {
-      // Position the cursor by measuring the actual rendered prefix with the
-      // same advance math drawText uses, rather than col * charW_ — immune to
-      // any mismatch between the cell model and real glyph advances.
-      const uint32_t off = std::min<uint32_t>(cursorPos_ - start, got);
+    // x offset of byte `off` within this row, measured with the same advance
+    // math drawText uses (immune to any mismatch with the cell model).
+    auto prefixX = [&](uint32_t off) {
+      off = std::min<uint32_t>(off, got);
       const char saved = rowBuf[off];
       rowBuf[off] = '\0';
-      const int cx = LEFT_MARGIN + renderer.getTextAdvanceX(EDITOR_FONT_ID, rowBuf, EpdFontFamily::REGULAR);
+      const int x = LEFT_MARGIN + renderer.getTextAdvanceX(EDITOR_FONT_ID, rowBuf, EpdFontFamily::REGULAR);
       rowBuf[off] = saved;
+      return x;
+    };
 
+    if (compose_ != ComposeState::None) {
+      // Underline the composition; thicker while a candidate is shown.
+      const uint32_t a = std::max(compStart_, start);
+      const uint32_t b = std::min(cursorPos_, start + got);
+      if (a < b) {
+        const int uy = y + charH_ - 3;
+        renderer.drawLine(prefixX(a - start), uy, prefixX(b - start), uy, compose_ == ComposeState::Converting ? 3 : 1,
+                          true);
+      }
+    }
+
+    if (showCursor && r == cursorRow_) {
+      const uint32_t off = std::min<uint32_t>(cursorPos_ - start, got);
+      const int cx = prefixX(off);
       int cw = charW_;
       if (off < got) {
         uint32_t cpLen;

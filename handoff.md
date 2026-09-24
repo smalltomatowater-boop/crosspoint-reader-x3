@@ -374,9 +374,37 @@ keyboard — none of it has been exercised:**
    `maxRows_` are computed from `renderer.getTextWidth`/`getLineHeight` at
    runtime, not hardcoded, but were never checked against the real display).
 
+## Kanji conversion (done 2026-09-24, verified on device)
+
+Owner chose MS-IME-style single-word conversion (not SKK-style input) and
+SKK-JISYO.L.
+
+- **Dictionary**: `scripts/build_skk_dict.py SKK-JISYO.L skk.txt` converts
+  EUC-JP → UTF-8, strips annotations/Lisp candidates, keeps hiragana readings
+  (+ SKK okuri-ari keys like `かk`), and sorts by UTF-8 bytes. Output (~4.8MB,
+  147,500 readings, longest line 970 B) goes on the SD card at
+  `/dict/skk.txt`. The dictionary is GPL, so it is **not** in the repo or the
+  firmware — users get it from https://github.com/skk-dev/dict.
+- **Lookup** (`lib/Editor/SkkDictionary`): binary search directly on the SD
+  file (~18 seeks), one 1KB line buffer per lookup, nothing kept in RAM.
+- **Candidates** (`lib/Editor/KanaConverter`): whole reading, then the last
+  1-3 kana as okurigana (stem + SKK okuri letter, e.g. かんじる → かんz →
+  感じる), then katakana, then the reading. No frequency learning; order is
+  the dictionary's.
+- **Editor**: the composition is kept *in the document* at
+  `[compStart_, cursorPos_)` (underlined; thick while converting), so layout,
+  scrolling and rendering needed no new path. Space/Shift+Space cycle,
+  Enter confirms, Esc/Backspace revert to the reading, any other key
+  confirms first. `commitComposition()` is the single commit seam.
+- Host tests: `test/kana_converter` (11 cases; `SKK_DICT=path/to/skk.txt`
+  also runs lookups against the real converted file).
+- Known limits: the dictionary is only opened on entering the editor (copy
+  it before entering); compositions over 32 kana aren't converted; no
+  bunsetsu segmentation.
+- **Next (owner request)**: the candidate list shares the status row with
+  the BLE/mode indicators and they collide — move candidates to their own
+  row at the top (one fewer text row is acceptable).
+
 ## Not started (M3/M4)
 
-- Kanji conversion (SKK-style, v2 — the `commit` seam for it is
-  `EditorActivity`'s `insertText()`/`commitPendingKana()`, untouched by any
-  future SKK layer per requirement #3).
-- Anything else in the original plan not called out as done above.
+- Anything in the original plan not called out as done above.

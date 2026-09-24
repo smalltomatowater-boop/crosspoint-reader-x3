@@ -3,10 +3,13 @@
 #include <GfxRenderer.h>
 
 #include <functional>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "EditorDocument.h"
 #include "RomajiKana.h"
+#include "SkkDictionary.h"
 #include "activities/Activity.h"
 #include "ble/BleHidClient.h"
 #include "fontIds.h"
@@ -124,6 +127,34 @@ class EditorActivity final : public Activity {
 
   void commitPendingKana();  // flushes any in-progress romaji composition into the document
   void insertText(const std::string& text);
+
+  // ==========================================================================
+  // Kanji conversion (Hiragana mode)
+  // ==========================================================================
+
+  // The composition (kana typed since the last commit) lives in the document
+  // itself at [compStart_, cursorPos_), so layout and rendering need no special
+  // path: converting replaces that range with a candidate, committing just
+  // forgets the range. The cursor is always at the end of the composition —
+  // any cursor movement commits first.
+  enum class ComposeState { None, Composing, Converting };
+  ComposeState compose_ = ComposeState::None;
+  uint32_t compStart_ = 0;
+  std::string compReading_;  // hiragana reading while Converting
+  std::vector<std::string> candidates_;
+  size_t candIndex_ = 0;
+  static constexpr uint32_t MAX_READING_BYTES = 96;  // 32 kana; longer compositions aren't converted
+
+  static constexpr const char* DICT_PATH = "/dict/skk.txt";  // scripts/build_skk_dict.py output
+  HalFile dictFile_;
+  std::unique_ptr<SkkDictionary> dict_;  // null when DICT_PATH is missing: conversion offers kana only
+  static uint32_t readDictFile(void* ctx, uint32_t pos, char* buf, uint32_t n);
+
+  void insertKana(const std::string& kana);  // romaji output; starts a composition in Hiragana mode
+  void commitComposition();                  // the single commit seam for all kana/kanji emission
+  void convertStep(int dir);                 // Space (+1) / Shift+Space (-1)
+  void revertConversion();                   // back to the hiragana reading
+  void replaceComposition(const std::string& text);
 
   // ==========================================================================
   // Menu / file actions (M2)
