@@ -36,6 +36,9 @@ class EditorActivity final : public Activity {
   // Grid metrics — computed in onEnter from the editor font
   static constexpr uint8_t LEFT_MARGIN = 4;
   static constexpr uint8_t TOP_MARGIN = 4;
+  // Strip on the physical-button edge (right side in this landscape
+  // orientation) kept clear for the Back/Menu button hints.
+  int hintStripW_ = 0;
   uint8_t charW_ = 10;  // ASCII cell width = glyph advance (not ink width) of the monospace half-width font
   uint8_t charH_ = 19;  // line height
   uint8_t maxCols_ = 0;

@@ -15,6 +15,7 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "activities/util/OptionMenuActivity.h"
+#include "components/UITheme.h"
 
 namespace {
 
@@ -185,7 +186,8 @@ void EditorActivity::applyFontMetrics() {
           renderer.getTextAdvanceX(EDITOR_FONT_ID, "AA", EpdFontFamily::REGULAR),
           renderer.getTextAdvanceX(EDITOR_FONT_ID, "\xe3\x81\x82", EpdFontFamily::REGULAR));
   // +1 row reserved for the status bar; keep cols at 80 max.
-  maxCols_ = static_cast<uint8_t>(std::min<int>((displayWidth_ - LEFT_MARGIN * 2) / charW_, 80));
+  hintStripW_ = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  maxCols_ = static_cast<uint8_t>(std::min<int>((displayWidth_ - LEFT_MARGIN * 2 - hintStripW_) / charW_, 80));
   const uint8_t rows = static_cast<uint8_t>(availH / charH_ - 1);
   maxRows_ = std::min<uint8_t>(rows, MAX_GRID_ROWS);
   LOG_INF("EDTR", "Grid: %dx%d cells (cell %dx%d px, display %dx%d px)", maxCols_, maxRows_, charW_, charH_,
@@ -841,7 +843,7 @@ void EditorActivity::drawStatusRow() {
   renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, y, left, true);
 
   const int rightW = renderer.getTextWidth(EDITOR_FONT_ID, right);
-  const int rightX = displayWidth_ - LEFT_MARGIN - rightW;
+  const int rightX = displayWidth_ - LEFT_MARGIN - hintStripW_ - rightW;
   if (rightX > LEFT_MARGIN) {
     renderer.drawText(EDITOR_FONT_ID, rightX, y, right, true);
   }
@@ -887,6 +889,11 @@ void EditorActivity::render(RenderLock&& lock) {
   }
 
   drawStatusRow();
+
+  // drawButtonHints switches to Portrait internally, so the hints land next to
+  // the physical front buttons whatever this activity's orientation is.
+  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_EDITOR_MENU), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer(fullRefreshNeeded_ ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
   frameDirty_ = false;
