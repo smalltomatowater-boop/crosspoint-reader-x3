@@ -1,10 +1,35 @@
 # handoff.md — BLE Text Editor Feature
 
-Status: **M2 done and flashed to a real X4** (branch `feature/ble-text-editor`,
-started 2026-09-24). Plan of record: see Claude plan "CrossPoint Text Editor —
-BLE Keyboard Note-Taking Feature" (approved). Milestones M1-M4.
+Status: **Editor + kanji conversion shipped and published (2026-09-24).**
+Fast-forwarded into `master` and pushed to the owner's fork
+(`fork` = github.com/smalltomatowater-boop/crosspoint-reader-x3; `origin` is
+upstream crosspoint-reader — nothing was pushed or PR'd there). The device
+is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
+"CrossPoint Text Editor — BLE Keyboard Note-Taking Feature". Milestones M1-M4.
 
-**On-device pass done 2026-09-24, real X4 + a real BLE keyboard: typing
+## Next session — start here
+
+1. **BLE auto-reconnect doesn't work** (owner: has to put the keyboard in
+   pairing mode every time the editor opens). Unverified hypothesis: a
+   bonded keyboard reconnects with advertising that omits the HID service
+   UUID, and `BleHidClient::onResult()` drops any device without it
+   (`if (!device->haveServiceUUID()) return;`). Check the raw scan results
+   on device first; a likely fix is to also accept
+   `NimBLEDevice::isBonded(device->getAddress())`. Watch for resolvable
+   private addresses (NimBLE needs the IRK from the bond to resolve them).
+2. **Heap**: ~18KB free with the keyboard connected, under the 50KB rule —
+   see "Heap budget" for measurements and candidate fixes (passive scan,
+   shorter scan window, NimBLE config).
+3. Not yet exercised on device: Open, New, and the discard-unsaved-changes
+   confirmation.
+4. Leftovers: `STR_SAVED`/`STR_SAVE_FAILED` exist but nothing shows a save
+   result on screen; candidate order is the dictionary's (no frequency
+   learning); no bunsetsu segmentation.
+
+To test the editor you need the dictionary at `/dict/skk.txt` on the SD
+card — see README "漢字変換辞書のセットアップ".
+
+**On-device pass done 2026-09-24, real X3 + a real BLE keyboard: typing
 works.** Editor enters/renders/exits cleanly; the keyboard connects, NimBLE
 auto-pairs (bonded, keys in NVS), all 5 HID report characteristics
 subscribe, and the owner confirmed text input on screen. Three real bugs
@@ -200,7 +225,7 @@ keyboard rather than by inspection:
    same retry loop and leak.
 
 Bugs 1-2 are committed in `c1e4f033`; bug 3 in the commit after it. All
-flashed to the test X4.
+flashed to the test X3.
 
 ## Heap budget (rule: >50KB headroom at all times) — **measured on device, rule not currently met**
 
