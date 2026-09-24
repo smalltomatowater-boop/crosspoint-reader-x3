@@ -39,6 +39,9 @@ class EditorActivity final : public Activity {
   // Grid metrics — computed in onEnter from the editor font
   static constexpr uint8_t LEFT_MARGIN = 4;
   static constexpr uint8_t TOP_MARGIN = 4;
+  // Row 0 is reserved for the kanji candidate list (blank when not
+  // converting), so text starts one row down and never reflows mid-conversion.
+  int textTop_ = 0;
   // Strip on the physical-button edge (right side in this landscape
   // orientation) kept clear for the Back/Menu button hints.
   int hintStripW_ = 0;
@@ -67,6 +70,7 @@ class EditorActivity final : public Activity {
   static constexpr int EDITOR_FONT_ID = UI_12_FONT_ID;
 
   void applyFontMetrics();
+  void drawCandidateRow();
   void drawStatusRow();
 
   // ==========================================================================

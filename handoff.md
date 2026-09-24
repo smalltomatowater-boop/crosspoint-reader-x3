@@ -401,9 +401,8 @@ SKK-JISYO.L.
 - Known limits: the dictionary is only opened on entering the editor (copy
   it before entering); compositions over 32 kana aren't converted; no
   bunsetsu segmentation.
-- **Next (owner request)**: the candidate list shares the status row with
-  the BLE/mode indicators and they collide — move candidates to their own
-  row at the top (one fewer text row is acceptable).
+- Candidates show on a reserved top row (blank when not converting), so
+  the grid is 57×16 text rows; owner accepted losing a row for this.
 
 ## Not started (M3/M4)
 

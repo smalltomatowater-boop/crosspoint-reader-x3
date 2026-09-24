@@ -201,10 +201,11 @@ void EditorActivity::applyFontMetrics() {
   LOG_INF("EDTR", "Advance: 'A'=%d px, 'AA'=%d px, wide=%d px", charW_,
           renderer.getTextAdvanceX(EDITOR_FONT_ID, "AA", EpdFontFamily::REGULAR),
           renderer.getTextAdvanceX(EDITOR_FONT_ID, "\xe3\x81\x82", EpdFontFamily::REGULAR));
-  // +1 row reserved for the status bar; keep cols at 80 max.
+  // Keep cols at 80 max.
   hintStripW_ = UITheme::getInstance().getMetrics().buttonHintsHeight;
   maxCols_ = static_cast<uint8_t>(std::min<int>((displayWidth_ - LEFT_MARGIN * 2 - hintStripW_) / charW_, 80));
-  const uint8_t rows = static_cast<uint8_t>(availH / charH_ - 1);
+  textTop_ = TOP_MARGIN + charH_;
+  const uint8_t rows = static_cast<uint8_t>(availH / charH_ - 2);  // - candidate row - status row
   maxRows_ = std::min<uint8_t>(rows, MAX_GRID_ROWS);
   LOG_INF("EDTR", "Grid: %dx%d cells (cell %dx%d px, display %dx%d px)", maxCols_, maxRows_, charW_, charH_,
           displayWidth_, displayHeight_);
@@ -927,25 +928,32 @@ void EditorActivity::requestExit() {
 // Rendering (render task)
 // ============================================================================
 
-void EditorActivity::drawStatusRow() {
-  const int y = TOP_MARGIN + static_cast<int>(maxRows_) * charH_;
+void EditorActivity::drawCandidateRow() {
+  if (compose_ != ComposeState::Converting || candidates_.empty()) return;
 
-  char left[128];
-  if (compose_ == ComposeState::Converting) {
-    // "[3/12] 各 角 画 ..." — the current candidate and as many following ones
-    // as fit; the status row doubles as the candidate list.
-    int n = snprintf(left, sizeof(left), "%s[%u/%u]", dict_ ? "" : tr(STR_DICT_MISSING),
-                     static_cast<unsigned>(candIndex_ + 1), static_cast<unsigned>(candidates_.size()));
-    for (size_t i = 0; i < candidates_.size() && n > 0 && n < static_cast<int>(sizeof(left)); ++i) {
-      const std::string& c = candidates_[(candIndex_ + i) % candidates_.size()];
-      if (n + 1 + c.size() + 1 > sizeof(left)) break;
-      n += snprintf(left + n, sizeof(left) - n, " %s", c.c_str());
-    }
-  } else {
-    const std::string name =
-        filePath_.empty() ? std::string(tr(STR_UNTITLED)) : filePath_.substr(filePath_.find_last_of('/') + 1);
-    snprintf(left, sizeof(left), "%s%s", document_.isDirty() ? "*" : "", name.c_str());
+  // "[3/12] 各 角 画 ..." — the current candidate first, then as many of the
+  // following ones as fit before the button-hint strip.
+  const int availW = displayWidth_ - LEFT_MARGIN * 2 - hintStripW_;
+  char head[40];
+  snprintf(head, sizeof(head), "%s[%u/%u]", dict_ ? "" : tr(STR_DICT_MISSING), static_cast<unsigned>(candIndex_ + 1),
+           static_cast<unsigned>(candidates_.size()));
+  std::string line(head);
+  for (size_t i = 0; i < candidates_.size(); ++i) {
+    const std::string next = line + " " + candidates_[(candIndex_ + i) % candidates_.size()];
+    if (renderer.getTextAdvanceX(EDITOR_FONT_ID, next.c_str(), EpdFontFamily::REGULAR) > availW) break;
+    line = next;
   }
+  renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, TOP_MARGIN, line.c_str(), true);
+  renderer.drawLine(LEFT_MARGIN, textTop_ - 2, LEFT_MARGIN + availW, textTop_ - 2, true);
+}
+
+void EditorActivity::drawStatusRow() {
+  const int y = textTop_ + static_cast<int>(maxRows_) * charH_;
+
+  char left[96];
+  const std::string name =
+      filePath_.empty() ? std::string(tr(STR_UNTITLED)) : filePath_.substr(filePath_.find_last_of('/') + 1);
+  snprintf(left, sizeof(left), "%s%s", document_.isDirty() ? "*" : "", name.c_str());
 
   const char* modeStr = (inputMode_ == InputMode::Hiragana)   ? "\xe3\x81\x82"  // あ
                         : (inputMode_ == InputMode::Katakana) ? "\xe3\x82\xa2"  // ア
@@ -988,7 +996,7 @@ void EditorActivity::render(RenderLock&& lock) {
     const uint32_t got = (len > 0) ? document_.readAt(start, rowBuf, len) : 0;
     rowBuf[got] = '\0';
 
-    const int y = TOP_MARGIN + static_cast<int>(r) * charH_;
+    const int y = textTop_ + static_cast<int>(r) * charH_;
     renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, y, rowBuf, true);
 
     // x offset of byte `off` within this row, measured with the same advance
@@ -1028,6 +1036,7 @@ void EditorActivity::render(RenderLock&& lock) {
     }
   }
 
+  drawCandidateRow();
   drawStatusRow();
 
   // drawButtonHints switches to Portrait internally, so the hints land next to
