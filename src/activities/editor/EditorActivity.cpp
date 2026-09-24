@@ -82,13 +82,11 @@ bool hidUsageToAscii(uint8_t usage, uint8_t mods, char& outChar) {
     outChar = ' ';
     return true;
   }
-  for (const auto& pp : kPunctTable) {
-    if (pp.usage == usage) {
-      outChar = hasShift(mods) ? pp.shifted : pp.plain;
-      return true;
-    }
-  }
-  return false;
+  const auto* end = std::end(kPunctTable);
+  const auto* it = std::find_if(std::begin(kPunctTable), end, [usage](const PunctPair& p) { return p.usage == usage; });
+  if (it == end) return false;
+  outChar = hasShift(mods) ? it->shifted : it->plain;
+  return true;
 }
 
 std::string utf8Encode3(uint32_t cp) {

@@ -68,11 +68,13 @@ bool TerminalActivity::applyFrame(JsonDocument& doc) {
     }
   }
 
-  bool changed = !frameReceived || rows.size() != next.size() ||
-                 cursorX != nx || cursorY != ny;
+  bool changed = !frameReceived || rows.size() != next.size() || cursorX != nx || cursorY != ny;
   if (!changed) {
     for (size_t i = 0; i < next.size(); i++) {
-      if (rows[i] != next[i]) { changed = true; break; }
+      if (rows[i] != next[i]) {
+        changed = true;
+        break;
+      }
     }
   }
 
@@ -219,8 +221,10 @@ void TerminalActivity::handleFontSize() {
   }
   int size = doc["size"] | 10;
   int newFont = UI_10_FONT_ID;
-  if (size == 8) newFont = TERM_8_FONT_ID;
-  else if (size == 12) newFont = UI_12_FONT_ID;
+  if (size == 8)
+    newFont = TERM_8_FONT_ID;
+  else if (size == 12)
+    newFont = UI_12_FONT_ID;
 
   if (newFont == TERM_8_FONT_ID && !termFont8_.getEpdFont(0)) {
     server->send(400, "text/plain", "8pt font not loaded\n");

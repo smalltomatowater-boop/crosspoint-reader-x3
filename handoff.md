@@ -26,6 +26,14 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
    result on screen; candidate order is the dictionary's (no frequency
    learning); no bunsetsu segmentation.
 
+CI facts learned the hard way (2026-09-25): `pio check` in CI runs with
+`--fail-on-defect low` — even a low-severity style nit fails the build, so
+don't leave any. The `open-x4-sdk` submodule now points at
+github.com/smalltomatowater-boop/community-sdk (branch `x3-partial-window`),
+because its pinned commit 8cab3b2 existed only locally and CI's checkout
+failed with "not our ref". Any future local SDK commit must be pushed there
+before the main repo's pointer is pushed.
+
 To test the editor you need the dictionary at `/dict/skk.txt` on the SD
 card — see README "漢字変換辞書のセットアップ".
 
