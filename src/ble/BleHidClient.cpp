@@ -124,10 +124,17 @@ bool BleHidClient::connectToDevice() {
   if (!subscribed) {
     // Most likely an encryption-requiring keyboard: v1 has no
     // pairing/bonding, so the subscribe is refused. Surface it to the UI
-    // instead of silently retrying forever.
+    // instead of silently retrying forever (see bleTaskRun()'s
+    // subscribeFailed_ latch). Because this now stops the retry loop that
+    // used to delete the stale client_ at the top of the *next*
+    // connectToDevice() call, this is the last chance to free it — NimBLE's
+    // per-connection GATT cache is large (measured ~60KB on device) and is
+    // not released by disconnect() alone.
     subscribeFailed_ = true;
     LOG_ERR("BLEH", "No notifiable HID report (pairing required?)");
     client_->disconnect();
+    NimBLEDevice::deleteClient(client_);
+    client_ = nullptr;
     return false;
   }
 
@@ -165,12 +172,18 @@ void BleHidClient::bleTaskRun() {
     if (connectPending_) {
       connectPending_ = false;
       scanning_ = false;
-      if (!connectToDevice()) {
+      if (!connectToDevice() && !subscribeFailed_) {
         vTaskDelay(pdMS_TO_TICKS(500));
         if (!stopRequested_) startScan();
       }
     }
-    if (!connected_ && !scanning_ && !connectPending_) {
+    // subscribeFailed_ latches: once a keyboard has refused the HID report
+    // subscribe (most likely because it requires encryption, which v1 has no
+    // pairing/bonding for), stop scanning/reconnecting rather than retrying
+    // forever against the same keyboard — surfaced to the UI instead
+    // (isSubscribeFailed()). A fresh begin() (re-entering the editor) is what
+    // resets it, via connectToDevice()'s own `subscribeFailed_ = false`.
+    if (!connected_ && !scanning_ && !connectPending_ && !subscribeFailed_) {
       vTaskDelay(pdMS_TO_TICKS(500));
       if (!stopRequested_) startScan();
     }

@@ -1,13 +1,21 @@
 # handoff.md — BLE Text Editor Feature
 
-Status: **M2 complete, uncommitted** (branch `feature/ble-text-editor`, started
-2026-09-24). Plan of record: see Claude plan "CrossPoint Text Editor — BLE
-Keyboard Note-Taking Feature" (approved). Milestones M1-M4.
+Status: **M2 done and flashed to a real X4** (branch `feature/ble-text-editor`,
+started 2026-09-24). Plan of record: see Claude plan "CrossPoint Text Editor —
+BLE Keyboard Note-Taking Feature" (approved). Milestones M1-M4.
 
-**Nothing in M2 has been flashed or run on real hardware.** Everything below
-that isn't a host test is reasoned-through-carefully-but-unverified. Treat the
-cursor/viewport/BLE-key-mapping code as the highest-risk area for the next
-session — see "What needs on-device verification" at the bottom.
+**First on-device pass done 2026-09-24, real X4 + a real BLE keyboard.** Editor
+enters/renders/exits cleanly, BLE scans and connects. Two real bugs found and
+fixed in `BleHidClient.cpp` this session (see "Bugs found and fixed on device"
+below) — **also found, still open**: active BLE scanning alone costs ~61KB,
+leaving only ~22KB free while connected, under the project's 50KB-headroom
+rule (see "Heap budget" below — this is real measured data now, not an
+estimate). Cursor movement, typing, save/open/new, and the specific HID-usage-
+to-ASCII table are still **not yet exercised** — the test keyboard available
+this session required encrypted pairing, which v1 doesn't support, so nothing
+past "subscribe fails, shown correctly in the status bar" was actually
+verified. Get a non-encrypted BLE keyboard for the next session — everything
+in "What needs on-device verification" still needs one.
 
 ## Why this feature (context for future sessions)
 
@@ -95,9 +103,8 @@ they're this session's calls, not pre-approved:
 - Problems fixed by the `src/ble/BleHidClient.h` extraction (M1): delivers
   raw usage+mods `HidKeyEvent` (not tmux key-name strings), Alt no longer
   discarded, US punctuation table bug at 0x31 fixed, boot-report-only parsing
-  (report-ID heuristic), subscribe-failure surfaced instead of a retry loop.
-  Still **no pairing/bonding** (v1 scope) and no JIS usage mapping (M2 punted
-  on this deliberately — see design decisions above).
+  (report-ID heuristic). Still **no pairing/bonding** (v1 scope) and no JIS
+  usage mapping (M2 punted on this deliberately — see design decisions above).
 - **v1 pairing = unencrypted connections, documented.** Keyboards requiring
   encryption fail the 2A4D subscribe → surface in status, don't retry-loop.
   v2 path exists in vendored NimBLE-Arduino 2.5.0:
@@ -117,18 +124,95 @@ they're this session's calls, not pre-approved:
   ASCII/kana-width UTF-8 correctly in one call — the editor's per-row
   rendering relies on this rather than drawing cell-by-cell.
 
-## Heap budget (rule: >50KB headroom at all times) — **not yet measured on device**
+## Bugs found and fixed on device (2026-09-24, this session)
 
-NimBLE ~40KB + editor ~40KB (pieces 18KB reserved, edit head 8KB, windows
-4KB, misc) ≈ 78-85KB total. Font data stays in flash. The "chunk table ≤3KB"
-line item from the original plan was dropped: `PieceTable`'s array is capped
-at 1536 pieces (~18KB) and a linear scan of that is trivially fast at 160MHz
-(sub-millisecond even in the worst case), so no secondary index was needed —
-see PieceTable.h's class comment. Actual RAM impact of `EditorActivity` (the
-4KB `viewportBuf_` plus the ~18.4KB `PieceTable` array live inside it,
-heap-allocated only while the activity is current) has **not been measured
-on device yet** — do that first in the next session (`LOG_DBG "MEM"` before/
-after `onEnter`/`onExit`, and again after opening a large file).
+Both in `src/ble/BleHidClient.cpp`, both pre-existing from M1 (not introduced
+by M2's EditorActivity work), both found by actually connecting a real BLE
+keyboard rather than by inspection:
+
+1. **Retry loop despite the "don't retry-loop" comment.** `connectToDevice()`
+   set `subscribeFailed_ = true` on a refused HID-report subscribe, but
+   `bleTaskRun()`'s loop never checked that flag before rescanning — the
+   comment described the intent, the code didn't implement it. Observed on
+   device as `Scanning... -> HID device found -> Connecting... -> No
+   notifiable HID report -> Scanning...` repeating every ~10s against the
+   same keyboard. Fixed: both restart paths in `bleTaskRun()` now also
+   require `!subscribeFailed_`. `connectToDevice()` still resets the flag to
+   false at its own start, so a fresh `begin()` (re-entering the editor)
+   retries cleanly; within one session, a subscribe failure now latches.
+2. **Client leak once (1) was fixed.** The old retry loop's *only* purpose in
+   practice was also what deleted the stale `NimBLEClient*` (at the top of
+   the next `connectToDevice()` call). Stopping the retry loop therefore
+   stopped that cleanup too — a subscribe failure now left `client_` (and
+   NimBLE's per-connection GATT cache) permanently allocated for the rest of
+   the session. Measured on device: free heap dropped from ~84KB (right
+   after BLE init) to ~22-24KB after one failed connect+subscribe cycle, and
+   *stayed there*, unrecovered, no matter how long the editor sat idle.
+   Fixed: `connectToDevice()` now calls `NimBLEDevice::deleteClient(client_)`
+   immediately in the subscribe-failure branch (matching the pattern the
+   "connection failed" branch right above it already used), instead of
+   deferring cleanup to a next attempt that, post-fix-1, might never come.
+   Confirmed fixed: free heap now returns to within ~1KB of its
+   pre-connection-attempt value after a failed connect, repeatably.
+
+Both fixes are committed (the commit right after `a22dffb3`) and flashed to
+the test X4.
+
+## Heap budget (rule: >50KB headroom at all times) — **measured on device, rule not currently met**
+
+Original estimate was NimBLE ~40KB + editor ~40KB ≈ 78-85KB total. Real
+measurements from this session (same X4, `default` build, `LOG_DBG "MEM"`,
+after both BLE fixes above):
+
+| Point | Free heap |
+|---|---|
+| Home screen (baseline, no editor, no BLE) | ~108-127KB |
+| `EditorActivity::onEnter()`, right before `bleHid_.begin()` | ~99-102KB |
+| Right after `bleHid_.begin()` returns (NimBLE init + task spawn, scan not yet running) | ~84KB |
+| Once `NimBLEScan` is actually active (`setActiveScan(true)`, before any device is found) | **~22KB** |
+| After a full connect → subscribe-fail → disconnect → `deleteClient` cycle | ~21-22KB (stable, no further drop) |
+
+**The dominant cost is active BLE scanning itself (~61KB), not the editor and
+not the connection attempt.** This is a real, currently-unmet gap against the
+project's own 50KB-headroom rule — it is not the leak that got fixed above
+(that leak was a separate, additional problem on top of this baseline). Open
+questions for next session, roughly in order of how likely they are to help:
+- Is `setActiveScan(true)` (active scan, requests scan-response data from
+  every advertiser) meaningfully more expensive than passive scanning here?
+  The editor only needs to match on HID-service UUID in the advertisement
+  itself (`onResult()` already checks `haveServiceUUID()`/
+  `isAdvertisingService()` before doing anything else) — passive scan may be
+  sufficient and cheaper.
+- `NimBLEScan::setInterval(100)`/`setWindow(99)` — a near-100%-duty-cycle
+  scan window; check whether NimBLE's scan result cache size scales with
+  how many advertisements it sees, and whether a shorter window (still fine
+  for a stationary keyboard, unlike a moving BLE peripheral) reduces it.
+- NimBLE-Arduino build-time config (`NIMBLE_MAX_CONNECTIONS`,
+  `CONFIG_BT_NIMBLE_MAX_CCCDS`, scan-list size, etc.) — this project already
+  vendors NimBLE-Arduino 2.5.0 (see the BLE facts above); check whether its
+  current config is tuned for a use case (e.g. multi-connection central)
+  that this single-keyboard editor doesn't need.
+- Whether ~22KB is actually *survivable* in practice (nothing else running
+  needs much heap while the editor has focus) even though it's under the
+  formal 50KB rule — worth deciding explicitly rather than by default,
+  since "the rule says 50KB" and "does anything actually break at 22KB"
+  are different questions with possibly different answers.
+
+The "chunk table ≤3KB" line item from the original plan was dropped:
+`PieceTable`'s array is capped at 1536 pieces (~18KB) and a linear scan of
+that is trivially fast at 160MHz (sub-millisecond even in the worst case), so
+no secondary index was needed — see PieceTable.h's class comment.
+
+The table above measures the editor's own pre-BLE cost only coarsely (Home
+baseline ~108-127KB → Editor-before-BLE ~99-102KB, a 6-9KB drop) — that
+number is muddied by `Home`'s own deallocation happening in the same
+`replaceActivity()` step that constructs `EditorActivity`, so it's not a
+clean isolated reading of `EditorDocument`'s ~18.4KB `PieceTable` + 8KB edit
+head + the activity's own 4KB `viewportBuf_`. Get an isolated number next
+session by reading `ESP.getFreeHeap()` right before and right after
+`document_.open()` specifically (not the existing before/after-BLE markers,
+which straddle the wrong boundary for this), and again after opening a file
+large enough to actually exercise `flatten()`.
 
 ## Research conclusions (don't redo)
 
@@ -216,9 +300,12 @@ keyboard — none of it has been exercised:**
 
 ## What needs on-device verification (do this first, in this order)
 
-1. Heap: `LOG_DBG "MEM"` before/after `onEnter`/`onExit`, and again after
-   opening a several-KB file — confirm the >50KB headroom rule holds and
-   `onExit()` actually returns the heap (BLE stop + document close).
+1. Heap: **mostly done** — see "Heap budget" above for the real numbers and
+   the open questions on reducing BLE scan cost. `onExit()` confirmed to
+   return heap fully to the Home-screen baseline (~108KB) after a full
+   enter → BLE-scan → connect-fail → exit cycle — no session-to-session
+   leak. Still needed: the isolated `EditorDocument::open()` before/after
+   reading described at the end of that section.
 2. BLE connect + the HID usage table: type the alphabet, digits, and every
    punctuation key in ASCII mode; confirm each lands as the right character.
    This table was written from memory of the USB HID Boot Keyboard spec, not
