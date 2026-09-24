@@ -12,8 +12,37 @@ found and fixed in `BleHidClient.cpp` this session (see "Bugs found and fixed
 on device" below). **Still open**: BLE costs ~61KB while scanning/connected,
 leaving only ~18KB free with the keyboard connected — under the project's
 50KB-headroom rule (see "Heap budget"; real measured data, not an estimate).
-Only basic typing has been exercised so far — kana input, cursor movement,
-save/open/new are still unverified (see "What needs on-device verification").
+Verified on device by the owner: ASCII and kana input, Tab mode cycling,
+cursor position, arrows, PgUp/PgDn, Home/End, scrolling up past a line break.
+Still unverified: save/open/new (see "What needs on-device verification").
+
+## Owner decisions from on-device testing (2026-09-24)
+
+- **Font: Migu 1M 12pt → 60 cols × 17 rows** (cell 13×28 px). This overrides
+  requirement #2's ~80×24: the owner first set "half-width 40 cols × 25 rows"
+  as the minimum, then chose 12pt knowing it only reaches 17 rows — 8pt was
+  too small to read. 25 rows would need a ≤20px pitch; 12pt's glyph extent
+  (ascender+descender) is 28px, so the pitch can't be tightened. 10pt and
+  12pt are both already loaded at boot as UI fonts, so the editor now reuses
+  `UI_12_FONT_ID` and no longer loads its own 8pt copy.
+- **Kana mode: digits and symbols are full-width** (U+FF01-FF5E), with
+  `,`→`、` `.`→`。` `[`→`「` `]`→`」` `/`→`・` (common IME defaults).
+  Letters (Shift+letter) and space stay half-width. ASCII mode is unchanged.
+
+## Bugs found and fixed on device (second pass)
+
+- Cursor drifted left toward the right edge: cell width came from
+  `getTextWidth("A")` (ink bounding box) instead of the glyph advance. Now
+  `getTextAdvanceX`, and the cursor x is the measured advance of the row
+  prefix, so it can't drift even if the cell model is off (measured: kana
+  advance is 25 px, not 2×13).
+- Could not scroll back up after the viewport had scrolled past a newline:
+  `findPreviousRowStart()` treated the newline ending the previous row as a
+  line start, returning `beforePos` itself.
+- Home menu couldn't reach Settings: `HomeActivity::getMenuItemCount()` still
+  said 5 after M1 added Text Edit as a 6th item.
+- Home/End "not working" was not a bug — tested on empty lines (start ==
+  end). Raw HID dump confirmed the keyboard sends standard 0x4A/0x4D.
 
 ## Why this feature (context for future sessions)
 

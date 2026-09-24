@@ -85,6 +85,38 @@ bool hidUsageToAscii(uint8_t usage, uint8_t mods, char& outChar) {
   return false;
 }
 
+std::string utf8Encode3(uint32_t cp) {
+  const char b[3] = {static_cast<char>(0xE0 | (cp >> 12)), static_cast<char>(0x80 | ((cp >> 6) & 0x3F)),
+                     static_cast<char>(0x80 | (cp & 0x3F))};
+  return std::string(b, 3);
+}
+
+// Kana-mode rendering of a non-romaji key, matching common Japanese IME
+// defaults: digits and symbols become full-width (U+FF01-FF5E), with the usual
+// Japanese punctuation for , . [ ] /. Letters (Shift+letter) and space stay
+// half-width so English words and spacing mix in naturally.
+std::string kanaModeSymbol(char ch) {
+  switch (ch) {
+    case ',':
+      return utf8Encode3(0x3001);  // 、
+    case '.':
+      return utf8Encode3(0x3002);  // 。
+    case '[':
+      return utf8Encode3(0x300C);  // 「
+    case ']':
+      return utf8Encode3(0x300D);  // 」
+    case '/':
+      return utf8Encode3(0x30FB);  // ・
+    default:
+      break;
+  }
+  const bool isLetter = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+  if (ch > ' ' && ch <= '~' && !isLetter) {
+    return utf8Encode3(static_cast<uint32_t>(ch) + 0xFEE0);
+  }
+  return std::string(1, ch);
+}
+
 constexpr uint32_t ROW_BUF_SIZE = 200;  // 80 cols worst case (all-kana) is ~120 bytes; stays under the 256B stack rule
 
 }  // namespace
@@ -107,18 +139,6 @@ void EditorActivity::onEnter() {
   renderer.setOrientation(GfxRenderer::Orientation::LandscapeCounterClockwise);
   displayWidth_ = renderer.getDisplayWidth();
   displayHeight_ = renderer.getDisplayHeight();
-
-  // Japanese-capable monospace font, loaded from flash (no DRAM copy of
-  // the bitmaps — loadFromMemory points into flash).
-  if (editorFont_.loadFromMemory(MIGU1M_TERM_08, MIGU1M_TERM_08_SIZE)) {
-    EpdFont* reg = editorFont_.getEpdFont(0);
-    if (reg) {
-      EpdFontFamily fam(reg, editorFont_.getEpdFont(1), editorFont_.getEpdFont(2), editorFont_.getEpdFont(3));
-      renderer.replaceFont(EDITOR_FONT_ID, fam);
-      activeFontId_ = EDITOR_FONT_ID;
-      LOG_INF("EDTR", "Editor font loaded");
-    }
-  }
 
   applyFontMetrics();
 
@@ -153,12 +173,20 @@ void EditorActivity::onExit() {
 }
 
 void EditorActivity::applyFontMetrics() {
-  charH_ = static_cast<uint8_t>(renderer.getLineHeight(activeFontId_));
-  charW_ = static_cast<uint8_t>(renderer.getTextWidth(activeFontId_, "A"));
+  const int availH = displayHeight_ - TOP_MARGIN;
+  charH_ = static_cast<uint8_t>(renderer.getLineHeight(EDITOR_FONT_ID));
+
+  // Advance, not getTextWidth(): the latter is the glyph's ink bounding box,
+  // narrower than the pen advance drawText actually steps by — using it made
+  // the cursor drift further left the further right it went.
+  charW_ = static_cast<uint8_t>(renderer.getTextAdvanceX(EDITOR_FONT_ID, "A", EpdFontFamily::REGULAR));
   if (charW_ == 0) charW_ = charH_ / 2;
+  LOG_INF("EDTR", "Advance: 'A'=%d px, 'AA'=%d px, wide=%d px", charW_,
+          renderer.getTextAdvanceX(EDITOR_FONT_ID, "AA", EpdFontFamily::REGULAR),
+          renderer.getTextAdvanceX(EDITOR_FONT_ID, "\xe3\x81\x82", EpdFontFamily::REGULAR));
   // +1 row reserved for the status bar; keep cols at 80 max.
   maxCols_ = static_cast<uint8_t>(std::min<int>((displayWidth_ - LEFT_MARGIN * 2) / charW_, 80));
-  const uint8_t rows = static_cast<uint8_t>((displayHeight_ - TOP_MARGIN) / charH_ - 1);
+  const uint8_t rows = static_cast<uint8_t>(availH / charH_ - 1);
   maxRows_ = std::min<uint8_t>(rows, MAX_GRID_ROWS);
   LOG_INF("EDTR", "Grid: %dx%d cells (cell %dx%d px, display %dx%d px)", maxCols_, maxRows_, charW_, charH_,
           displayWidth_, displayHeight_);
@@ -303,7 +331,7 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
           }
         } else {
           commitPendingKana();
-          insertText(std::string(1, ch));
+          insertText(inputMode_ != InputMode::Ascii ? kanaModeSymbol(ch) : std::string(1, ch));
           contentChanged = true;
         }
       }
@@ -523,8 +551,12 @@ uint32_t EditorActivity::findPreviousRowStart(uint32_t beforePos) {
   // call anyway, so nothing else depends on its contents surviving this scan.
   const uint32_t got = document_.readAt(scanStart, viewportBuf_, scanCap);
 
+  // The byte right before beforePos may be the newline that *ends* the previous
+  // row — it belongs to that row, not to a line before it, so it must not count
+  // as a line start. Including it made lineStart == beforePos and the viewport
+  // could never scroll up past a line break.
   uint32_t lineStart = scanStart;
-  for (uint32_t i = 0; i < got; ++i) {
+  for (uint32_t i = 0; i + 1 < got; ++i) {
     if (viewportBuf_[i] == '\n') lineStart = scanStart + i + 1;
   }
 
@@ -806,18 +838,19 @@ void EditorActivity::drawStatusRow() {
   char right[48];
   snprintf(right, sizeof(right), "%s BLE:%s %dKB", modeStr, bleState, ESP.getFreeHeap() / 1024);
 
-  renderer.drawText(activeFontId_, LEFT_MARGIN, y, left, true);
+  renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, y, left, true);
 
-  const int rightW = renderer.getTextWidth(activeFontId_, right);
+  const int rightW = renderer.getTextWidth(EDITOR_FONT_ID, right);
   const int rightX = displayWidth_ - LEFT_MARGIN - rightW;
   if (rightX > LEFT_MARGIN) {
-    renderer.drawText(activeFontId_, rightX, y, right, true);
+    renderer.drawText(EDITOR_FONT_ID, rightX, y, right, true);
   }
 }
 
 void EditorActivity::render(RenderLock&& lock) {
   renderer.clearScreen(0xFF);
 
+  const bool showCursor = cursorRow_ >= 0 && bleHid_.isConnected();
   char rowBuf[ROW_BUF_SIZE];
   for (uint8_t r = 0; r < rowCount_ && r < maxRows_; ++r) {
     const uint32_t start = rowStart_[r];
@@ -829,13 +862,28 @@ void EditorActivity::render(RenderLock&& lock) {
     rowBuf[got] = '\0';
 
     const int y = TOP_MARGIN + static_cast<int>(r) * charH_;
-    renderer.drawText(activeFontId_, LEFT_MARGIN, y, rowBuf, true);
-  }
+    renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, y, rowBuf, true);
 
-  if (cursorRow_ >= 0 && bleHid_.isConnected()) {
-    const int cx = LEFT_MARGIN + cursorCol_ * charW_;
-    const int cy = TOP_MARGIN + cursorRow_ * charH_;
-    renderer.drawRect(cx, cy, charW_, charH_, 1, true);
+    if (showCursor && r == cursorRow_) {
+      // Position the cursor by measuring the actual rendered prefix with the
+      // same advance math drawText uses, rather than col * charW_ — immune to
+      // any mismatch between the cell model and real glyph advances.
+      const uint32_t off = std::min<uint32_t>(cursorPos_ - start, got);
+      const char saved = rowBuf[off];
+      rowBuf[off] = '\0';
+      const int cx = LEFT_MARGIN + renderer.getTextAdvanceX(EDITOR_FONT_ID, rowBuf, EpdFontFamily::REGULAR);
+      rowBuf[off] = saved;
+
+      int cw = charW_;
+      if (off < got) {
+        uint32_t cpLen;
+        decodeUtf8At(rowBuf + off, got - off, cpLen);
+        char ch[5] = {};
+        memcpy(ch, rowBuf + off, std::min<uint32_t>(cpLen, 4));
+        cw = renderer.getTextAdvanceX(EDITOR_FONT_ID, ch, EpdFontFamily::REGULAR);
+      }
+      renderer.drawRect(cx, y, cw, charH_, 1, true);
+    }
   }
 
   drawStatusRow();

@@ -1,8 +1,6 @@
 #pragma once
 
 #include <GfxRenderer.h>
-#include <SdCardFont.h>
-#include <builtinFonts/migu1m_term_08.h>
 
 #include <functional>
 #include <string>
@@ -38,7 +36,7 @@ class EditorActivity final : public Activity {
   // Grid metrics — computed in onEnter from the editor font
   static constexpr uint8_t LEFT_MARGIN = 4;
   static constexpr uint8_t TOP_MARGIN = 4;
-  uint8_t charW_ = 10;  // ASCII cell width (monospace half-width)
+  uint8_t charW_ = 10;  // ASCII cell width = glyph advance (not ink width) of the monospace half-width font
   uint8_t charH_ = 19;  // line height
   uint8_t maxCols_ = 0;
   uint8_t maxRows_ = 0;  // text rows; +1 status row below
@@ -57,11 +55,10 @@ class EditorActivity final : public Activity {
   void onBleKey(const HidKeyEvent& ev);
   static void bleEventTrampoline(void* ctx, const HidKeyEvent& ev);
 
-  // Editor font: same Migu 1M 8pt bitmaps as the terminal, registered under
-  // an editor-private id so the two activities never fight over a slot.
-  static constexpr int EDITOR_FONT_ID = 0x45445430;  // "EDT0"
-  SdCardFont editorFont_;
-  int activeFontId_ = UI_10_FONT_ID;
+  // Migu 1M 12pt (owner's choice: 60x17 cells, readability over row count),
+  // already loaded at boot as the UI title font (main.cpp tryLoadSdUiFonts) —
+  // no extra flash or RAM.
+  static constexpr int EDITOR_FONT_ID = UI_12_FONT_ID;
 
   void applyFontMetrics();
   void drawStatusRow();
