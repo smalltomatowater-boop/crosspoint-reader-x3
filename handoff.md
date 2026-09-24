@@ -4,18 +4,16 @@ Status: **M2 done and flashed to a real X4** (branch `feature/ble-text-editor`,
 started 2026-09-24). Plan of record: see Claude plan "CrossPoint Text Editor —
 BLE Keyboard Note-Taking Feature" (approved). Milestones M1-M4.
 
-**First on-device pass done 2026-09-24, real X4 + a real BLE keyboard.** Editor
-enters/renders/exits cleanly, BLE scans and connects. Two real bugs found and
-fixed in `BleHidClient.cpp` this session (see "Bugs found and fixed on device"
-below) — **also found, still open**: active BLE scanning alone costs ~61KB,
-leaving only ~22KB free while connected, under the project's 50KB-headroom
-rule (see "Heap budget" below — this is real measured data now, not an
-estimate). Cursor movement, typing, save/open/new, and the specific HID-usage-
-to-ASCII table are still **not yet exercised** — the test keyboard available
-this session required encrypted pairing, which v1 doesn't support, so nothing
-past "subscribe fails, shown correctly in the status bar" was actually
-verified. Get a non-encrypted BLE keyboard for the next session — everything
-in "What needs on-device verification" still needs one.
+**On-device pass done 2026-09-24, real X4 + a real BLE keyboard: typing
+works.** Editor enters/renders/exits cleanly; the keyboard connects, NimBLE
+auto-pairs (bonded, keys in NVS), all 5 HID report characteristics
+subscribe, and the owner confirmed text input on screen. Three real bugs
+found and fixed in `BleHidClient.cpp` this session (see "Bugs found and fixed
+on device" below). **Still open**: BLE costs ~61KB while scanning/connected,
+leaving only ~18KB free with the keyboard connected — under the project's
+50KB-headroom rule (see "Heap budget"; real measured data, not an estimate).
+Only basic typing has been exercised so far — kana input, cursor movement,
+save/open/new are still unverified (see "What needs on-device verification").
 
 ## Why this feature (context for future sessions)
 
@@ -105,12 +103,17 @@ they're this session's calls, not pre-approved:
   discarded, US punctuation table bug at 0x31 fixed, boot-report-only parsing
   (report-ID heuristic). Still **no pairing/bonding** (v1 scope) and no JIS
   usage mapping (M2 punted on this deliberately — see design decisions above).
-- **v1 pairing = unencrypted connections, documented.** Keyboards requiring
-  encryption fail the 2A4D subscribe → surface in status, don't retry-loop.
-  v2 path exists in vendored NimBLE-Arduino 2.5.0:
-  `NimBLEDevice::setSecurityAuth` (NimBLEDevice.h:148),
-  `NimBLEClient::secureConnection()` (NimBLEClient.h:72), bond address in
-  `/.crosspoint/ble_keyboard.json` (WifiCredentialStore pattern).
+- **Pairing works (Just Works, bonded).** The earlier "v1 = unencrypted only,
+  encrypted keyboards fail the subscribe" diagnosis was **wrong** — the
+  subscribe never actually ran (bug 3 below). HOGP requires encryption for
+  HID reports, so effectively every real BLE keyboard needs pairing; NimBLE
+  handles it on demand when the subscribe write hits an insufficient-
+  encryption error (NimBLERemoteValueAttribute.cpp:76-79), and
+  `setSecurityAuth(bond=true, mitm=false, sc=true)` in `bleTaskRun()` keeps
+  the bond in NVS. Not yet handled: keyboards that insist on MITM/passkey
+  entry (would need `setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY)` plus an
+  `onPassKeyDisplay` override that shows the 6-digit code in the status
+  row), and a UI to forget bonds (`NimBLEDevice::deleteAllBonds()`).
 - `BleHidClient::discardPending()` exists precisely for the push-sub-activity
   case (menu/file-picker/keyboard-entry on top of the editor) — EditorActivity
   calls it before *and* after every such push so stray keystrokes typed while
@@ -126,8 +129,8 @@ they're this session's calls, not pre-approved:
 
 ## Bugs found and fixed on device (2026-09-24, this session)
 
-Both in `src/ble/BleHidClient.cpp`, both pre-existing from M1 (not introduced
-by M2's EditorActivity work), both found by actually connecting a real BLE
+All in `src/ble/BleHidClient.cpp`, all pre-existing from M1 (not introduced
+by M2's EditorActivity work), all found by actually connecting a real BLE
 keyboard rather than by inspection:
 
 1. **Retry loop despite the "don't retry-loop" comment.** `connectToDevice()`
@@ -155,8 +158,20 @@ keyboard rather than by inspection:
    Confirmed fixed: free heap now returns to within ~1KB of its
    pre-connection-attempt value after a failed connect, repeatably.
 
-Both fixes are committed (the commit right after `a22dffb3`) and flashed to
-the test X4.
+3. **The subscribe loop never ran — the real reason every keyboard
+   "failed".** `connectToDevice()` iterated `svc->getCharacteristics(false)`,
+   which returns NimBLE's cached vector — empty until characteristics have
+   been discovered once (NimBLERemoteService.cpp:118-124). Zero iterations,
+   `subscribed` stayed false, and it logged "pairing required?" ~100ms after
+   connecting, far too fast for any pairing to have been attempted. Fixed:
+   `getCharacteristics(true)`. With that plus bonding enabled, the test
+   keyboard paired automatically (~1.8s), subscribed 5 report
+   characteristics, and typing worked. Bugs 1 and 2 are still worth keeping
+   fixed: a keyboard that genuinely refuses pairing would otherwise hit the
+   same retry loop and leak.
+
+Bugs 1-2 are committed in `c1e4f033`; bug 3 in the commit after it. All
+flashed to the test X4.
 
 ## Heap budget (rule: >50KB headroom at all times) — **measured on device, rule not currently met**
 
@@ -171,6 +186,7 @@ after both BLE fixes above):
 | Right after `bleHid_.begin()` returns (NimBLE init + task spawn, scan not yet running) | ~84KB |
 | Once `NimBLEScan` is actually active (`setActiveScan(true)`, before any device is found) | **~22KB** |
 | After a full connect → subscribe-fail → disconnect → `deleteClient` cycle | ~21-22KB (stable, no further drop) |
+| Keyboard connected, paired, 5 reports subscribed (after bug 3 fix) | **~18KB** (MaxAlloc ~15KB; MinFree drifted ~130 bytes over 40s — watch for a slow leak over a long session) |
 
 **The dominant cost is active BLE scanning itself (~61KB), not the editor and
 not the connection attempt.** This is a real, currently-unmet gap against the

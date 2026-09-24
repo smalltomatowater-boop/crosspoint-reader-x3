@@ -112,7 +112,10 @@ bool BleHidClient::connectToDevice() {
   }
 
   bool subscribed = false;
-  for (auto* ch : svc->getCharacteristics(false)) {
+  // refresh=true is required: with false, NimBLE returns its cached vector,
+  // which is empty until characteristics have been discovered at least once
+  // (NimBLERemoteService.cpp:118-124) — the subscribe loop never ran at all.
+  for (auto* ch : svc->getCharacteristics(true)) {
     if (ch->getUUID() == NimBLEUUID(HID_REPORT_UUID) && ch->canNotify()) {
       if (ch->subscribe(true, notifyCallback)) {
         subscribed = true;
@@ -131,7 +134,8 @@ bool BleHidClient::connectToDevice() {
     // per-connection GATT cache is large (measured ~60KB on device) and is
     // not released by disconnect() alone.
     subscribeFailed_ = true;
-    LOG_ERR("BLEH", "No notifiable HID report (pairing required?)");
+    LOG_ERR("BLEH", "No notifiable HID report subscribed (%u characteristics, last err %d)",
+            static_cast<unsigned>(svc->getCharacteristics(false).size()), client_->getLastError());
     client_->disconnect();
     NimBLEDevice::deleteClient(client_);
     client_ = nullptr;
@@ -165,6 +169,11 @@ void BleHidClient::bleTaskEntry(void* arg) {
 
 void BleHidClient::bleTaskRun() {
   NimBLEDevice::init(deviceName_.c_str());
+  // HOGP requires an encrypted link for HID reports. NimBLE pairs on demand
+  // when a subscribe hits an insufficient-encryption error
+  // (NimBLERemoteValueAttribute.cpp:76-79); bonding keeps the keys in NVS
+  // (CONFIG_BT_NIMBLE_NVS_PERSIST) so later reconnects skip pairing.
+  NimBLEDevice::setSecurityAuth(/*bonding=*/true, /*mitm=*/false, /*sc=*/true);
   bleRunning_ = true;
   startScan();
 
