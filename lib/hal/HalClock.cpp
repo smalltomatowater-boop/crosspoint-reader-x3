@@ -13,6 +13,10 @@ HalClock halClock;  // Singleton instance
 //   0x00: Seconds  (bits 6-4 = tens, bits 3-0 = ones)
 //   0x01: Minutes  (bits 6-4 = tens, bits 3-0 = ones)
 //   0x02: Hours    (bit 6 = 12/24 mode, bits 5-4 = tens, bits 3-0 = ones)
+//   0x03: Day of week (1-7, unused here)
+//   0x04: Date     (1-31)
+//   0x05: Month    (1-12; bit 7 = century, unused — years are 2000-2099)
+//   0x06: Year     (00-99)
 
 static uint8_t bcdToDec(uint8_t bcd) { return ((bcd >> 4) * 10) + (bcd & 0x0F); }
 static uint8_t decToBcd(uint8_t dec) { return ((dec / 10) << 4) | (dec % 10); }
@@ -149,6 +153,89 @@ bool HalClock::writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second) {
   return true;
 }
 
+bool HalClock::writeDateToRTC(uint16_t year, uint8_t month, uint8_t day) {
+  if (year < 2000 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  Wire.beginTransmission(I2C_ADDR_DS3231);
+  Wire.write(0x04);  // Date register
+  Wire.write(decToBcd(day));
+  Wire.write(decToBcd(month));
+  Wire.write(decToBcd(static_cast<uint8_t>(year - 2000)));
+  if (Wire.endTransmission() != 0) {
+    LOG_ERR("CLK", "Failed to write date to DS3231");
+    return false;
+  }
+  return true;
+}
+
+namespace {
+// Days since 1970-01-01 for a proleptic Gregorian date, and back
+// (H. Hinnant's days_from_civil / civil_from_days).
+int32_t daysFromCivil(int32_t y, uint32_t m, uint32_t d) {
+  y -= m <= 2;
+  const int32_t era = (y >= 0 ? y : y - 399) / 400;
+  const uint32_t yoe = static_cast<uint32_t>(y - era * 400);
+  const uint32_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + static_cast<int32_t>(doe) - 719468;
+}
+
+void civilFromDays(int32_t z, int32_t& y, uint32_t& m, uint32_t& d) {
+  z += 719468;
+  const int32_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const uint32_t doe = static_cast<uint32_t>(z - era * 146097);
+  const uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const uint32_t mp = (5 * doy + 2) / 153;
+  d = doy - (153 * mp + 2) / 5 + 1;
+  m = mp < 10 ? mp + 3 : mp - 9;
+  y = static_cast<int32_t>(yoe) + era * 400 + (m <= 2);
+}
+}  // namespace
+
+bool HalClock::getLocalDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute,
+                                uint8_t utcOffsetQuarterHoursBiased) const {
+  if (!_available) return false;
+
+  Wire.beginTransmission(I2C_ADDR_DS3231);
+  Wire.write(DS3231_SEC_REG);
+  if (Wire.endTransmission(false) != 0) return false;
+  Wire.requestFrom(I2C_ADDR_DS3231, (uint8_t)7);
+  if (Wire.available() < 7) return false;
+  uint8_t r[7];
+  for (uint8_t& b : r) b = Wire.read();
+
+  const uint8_t min = bcdToDec(r[1] & 0x7F);
+  uint8_t h;
+  if (r[2] & 0x40) {
+    uint8_t h12 = bcdToDec(r[2] & 0x1F);
+    if (h12 == 12) h12 = 0;
+    h = (r[2] & 0x20) ? h12 + 12 : h12;
+  } else {
+    h = bcdToDec(r[2] & 0x3F);
+  }
+  const uint8_t d = bcdToDec(r[4] & 0x3F);
+  const uint8_t mo = bcdToDec(r[5] & 0x1F);
+  const uint16_t y = 2000 + bcdToDec(r[6]);
+  // Power-on default is 2000-01-01; a date only becomes real after syncFromNTP().
+  if (y < 2024 || mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+
+  if (utcOffsetQuarterHoursBiased > 104) utcOffsetQuarterHoursBiased = 104;
+  const int32_t offsetMin = (static_cast<int32_t>(utcOffsetQuarterHoursBiased) - 48) * 15;
+  const int32_t totalMin = daysFromCivil(y, mo, d) * 1440 + h * 60 + min + offsetMin;
+  const int32_t days = totalMin >= 0 ? totalMin / 1440 : (totalMin - 1439) / 1440;
+  const int32_t minOfDay = totalMin - days * 1440;
+
+  int32_t ly;
+  uint32_t lm, ld;
+  civilFromDays(days, ly, lm, ld);
+  year = static_cast<uint16_t>(ly);
+  month = static_cast<uint8_t>(lm);
+  day = static_cast<uint8_t>(ld);
+  hour = static_cast<uint8_t>(minOfDay / 60);
+  minute = static_cast<uint8_t>(minOfDay % 60);
+  return true;
+}
+
 bool HalClock::syncFromNTP() {
   if (!_available) return false;
 
@@ -169,6 +256,8 @@ bool HalClock::syncFromNTP() {
       gmtime_r(&now, &timeinfo);
 
       if (writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
+        // Date too (non-fatal): editor timestamps need it; the status-bar clock doesn't.
+        writeDateToRTC(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
         LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
         return true;
       }

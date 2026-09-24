@@ -14,7 +14,7 @@ leaving only ~18KB free with the keyboard connected — under the project's
 50KB-headroom rule (see "Heap budget"; real measured data, not an estimate).
 Verified on device by the owner: ASCII and kana input, Tab mode cycling,
 cursor position, arrows, PgUp/PgDn, Home/End, scrolling up past a line break.
-Still unverified: save/open/new (see "What needs on-device verification").
+Save (auto-named) and reopen verified too; Open/New/discard-confirm not yet exercised.
 
 ## Owner decisions from on-device testing (2026-09-24)
 
@@ -403,6 +403,26 @@ SKK-JISYO.L.
   bunsetsu segmentation.
 - Candidates show on a reserved top row (blank when not converting), so
   the grid is 57×16 text rows; owner accepted losing a row for this.
+
+## Save flow and orientation (done 2026-09-24, verified on device)
+
+- Owner found saving hard: menus and the filename keyboard were rendered in
+  the editor's landscape orientation, where the physical buttons don't line
+  up with the screen. `EditorActivity::startSubActivity()` now shows every
+  sub-activity (menu, file picker, keyboard entry, confirm dialog) in the
+  normal UI orientation and restores landscape when it returns. The text
+  grid itself stays landscape (owner's choice).
+- "Save" on an untitled document no longer asks for a name: it writes
+  `/notes/YYYYMMDD-HHMM.txt` (local time, `SETTINGS.clockUtcOffsetQ`), or
+  `/notes/memo-NNN.txt` if the RTC has no date yet, adding `-2`, `-3`… on
+  collisions. Save As prefills the same name.
+- The RTC date: `HalClock` only ever wrote H:M:S, so there was no date to
+  read. `syncFromNTP()` now also writes the DS3231 date registers
+  (0x04-0x06) and `HalClock::getLocalDateTime()` reads date+time with the
+  UTC offset applied (date rollover handled; the day-count math was
+  host-checked against gmtime over ~24k dates). Dates only become valid
+  after one NTP sync on this firmware — until then names fall back to
+  `memo-NNN`.
 
 ## Not started (M3/M4)
 

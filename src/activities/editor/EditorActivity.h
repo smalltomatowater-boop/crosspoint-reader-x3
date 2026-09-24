@@ -164,6 +164,15 @@ class EditorActivity final : public Activity {
   // Menu / file actions (M2)
   // ==========================================================================
 
+  // Pushes a button-driven sub-activity (menu, picker, dialog) in the normal
+  // UI orientation and restores the editor's landscape grid when it returns.
+  void startSubActivity(std::unique_ptr<Activity> activity, ActivityResultHandler handler);
+
+  static constexpr const char* AUTO_SAVE_DIR = "/notes";
+  // "/notes/YYYYMMDD-HHMM.txt" (local time) if the RTC has a date, else
+  // "/notes/memo-NNN.txt"; always a path that doesn't exist yet.
+  static std::string makeAutoSavePath();
+
   void showEditorMenu();
   void doSave();
   void promptSaveAs();

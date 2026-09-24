@@ -35,6 +35,12 @@ class HalClock {
   // Returns false if RTC is not available.
   bool formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHoursBiased = 48, bool use12Hour = false) const;
 
+  // Local date and time (UTC offset applied, including date rollover).
+  // Returns false if the RTC is unavailable or its date was never set — the
+  // date is only written by syncFromNTP(), so it needs one NTP sync first.
+  bool getLocalDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute,
+                        uint8_t utcOffsetQuarterHoursBiased = 48) const;
+
   // Sync the DS3231 RTC from an NTP server. Requires WiFi to be connected.
   // Blocks for up to ~5s while waiting for SNTP response.
   // Returns true if the RTC was successfully updated.
@@ -45,4 +51,5 @@ class HalClock {
 
  private:
   bool writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second);
+  bool writeDateToRTC(uint16_t year, uint8_t month, uint8_t day);
 };

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <FsHelpers.h>
+#include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -12,6 +13,7 @@
 #include <variant>
 #include <vector>
 
+#include "CrossPointSettings.h"
 #include "KanaConverter.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -796,30 +798,75 @@ void EditorActivity::showEditorMenu() {
     }
   };
 
-  startActivityForResult(
-      std::make_unique<OptionMenuActivity>(renderer, mappedInput, tr(STR_EDITOR_MENU), std::move(options)), handler);
+  startSubActivity(std::make_unique<OptionMenuActivity>(renderer, mappedInput, tr(STR_EDITOR_MENU), std::move(options)),
+                   handler);
 }
 
 void EditorActivity::doSave() {
-  if (document_.currentPath().empty()) {
-    promptSaveAs();
-    return;
+  // An untitled document saves straight away under a timestamp name —
+  // typing a filename with the physical buttons is slow; Save As still
+  // offers a custom name.
+  std::string path = document_.currentPath();
+  if (path.empty()) {
+    Storage.mkdir(AUTO_SAVE_DIR);
+    path = makeAutoSavePath();
   }
   document_.flushEditHead();
-  if (document_.save(document_.currentPath())) {
-    filePath_ = document_.currentPath();
+  if (document_.save(path)) {
+    filePath_ = path;
     LOG_INF("EDTR", "Saved: %s", filePath_.c_str());
   } else {
-    LOG_ERR("EDTR", "Save failed: %s", document_.currentPath().c_str());
+    LOG_ERR("EDTR", "Save failed: %s", path.c_str());
   }
   frameDirty_ = true;
+}
+
+std::string EditorActivity::makeAutoSavePath() {
+  uint16_t y;
+  uint8_t mo, d, h, mi;
+  const bool haveDate = halClock.getLocalDateTime(y, mo, d, h, mi, SETTINGS.clockUtcOffsetQ);
+  char stamp[20] = {};
+  if (haveDate) snprintf(stamp, sizeof(stamp), "%04u%02u%02u-%02u%02u", y, mo, d, h, mi);
+
+  char path[64];
+  for (int n = 1; n < 1000; ++n) {
+    if (!haveDate) {
+      snprintf(path, sizeof(path), "%s/memo-%03d.txt", AUTO_SAVE_DIR, n);  // RTC date never synced
+    } else if (n == 1) {
+      snprintf(path, sizeof(path), "%s/%s.txt", AUTO_SAVE_DIR, stamp);
+    } else {
+      snprintf(path, sizeof(path), "%s/%s-%d.txt", AUTO_SAVE_DIR, stamp, n);
+    }
+    if (!Storage.exists(path)) return path;
+  }
+  return std::string(AUTO_SAVE_DIR) + "/memo.txt";
+}
+
+void EditorActivity::startSubActivity(std::unique_ptr<Activity> activity, ActivityResultHandler handler) {
+  // Menus, file pickers and the filename keyboard are driven by the physical
+  // buttons, which only line up with the screen in the normal (portrait) UI
+  // orientation — show them there, and switch back to the landscape grid
+  // when they return.
+  {
+    RenderLock lock(*this);
+    renderer.setOrientation(savedOrientation_);
+  }
+  startActivityForResult(std::move(activity), [this, handler = std::move(handler)](const ActivityResult& res) {
+    {
+      RenderLock lock(*this);
+      renderer.setOrientation(GfxRenderer::Orientation::LandscapeCounterClockwise);
+    }
+    fullRefreshNeeded_ = true;
+    frameDirty_ = true;
+    handler(res);
+  });
 }
 
 void EditorActivity::promptSaveAs() {
   bleHid_.discardPending();
 
-  const std::string initial =
-      filePath_.empty() ? (std::string(tr(STR_UNTITLED)) + ".txt") : filePath_.substr(filePath_.find_last_of('/') + 1);
+  const std::string initial = filePath_.empty() ? makeAutoSavePath().substr(strlen(AUTO_SAVE_DIR) + 1)
+                                                : filePath_.substr(filePath_.find_last_of('/') + 1);
 
   auto handler = [this](const ActivityResult& res) {
     bleHid_.discardPending();
@@ -833,7 +880,8 @@ void EditorActivity::promptSaveAs() {
     if (!FsHelpers::hasTxtExtension(name) && !FsHelpers::hasMarkdownExtension(name)) {
       name += ".txt";
     }
-    std::string dir = filePath_.empty() ? "/" : FsHelpers::extractFolderPath(filePath_);
+    if (filePath_.empty()) Storage.mkdir(AUTO_SAVE_DIR);
+    std::string dir = filePath_.empty() ? AUTO_SAVE_DIR : FsHelpers::extractFolderPath(filePath_);
     if (dir.empty()) dir = "/";
     if (dir.back() != '/') dir += "/";
     const std::string targetPath = dir + name;
@@ -847,8 +895,8 @@ void EditorActivity::promptSaveAs() {
     }
   };
 
-  startActivityForResult(
-      std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_ENTER_FILENAME), initial), handler);
+  startSubActivity(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_ENTER_FILENAME), initial),
+                   handler);
 }
 
 void EditorActivity::switchToDocument(const std::string& newPath) {
@@ -879,9 +927,9 @@ void EditorActivity::confirmDiscardThen(std::function<void()> action) {
     frameDirty_ = true;
     if (!res.isCancelled) action();
   };
-  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_UNSAVED_CHANGES),
-                                                                tr(STR_DISCARD_CHANGES_BODY)),
-                         handler);
+  startSubActivity(std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_UNSAVED_CHANGES),
+                                                          tr(STR_DISCARD_CHANGES_BODY)),
+                   handler);
 }
 
 void EditorActivity::promptOpen() {
@@ -903,7 +951,7 @@ void EditorActivity::promptOpen() {
     }
   };
 
-  startActivityForResult(
+  startSubActivity(
       std::make_unique<FileBrowserActivity>(renderer, mappedInput, "/", FileBrowserActivity::Mode::PickTextFile),
       handler);
 }
