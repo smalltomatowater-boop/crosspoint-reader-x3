@@ -966,23 +966,51 @@ void EditorActivity::handleViCommandKey(const HidKeyEvent& ev) {
 }
 
 void EditorActivity::runViCommand() {
-  const std::string_view cmd(viCommand_, viCommandLen_);
-  if (cmd == "w") {
-    doSave();
-  } else if (cmd == "q") {
-    requestExit();  // asks before discarding unsaved changes
-  } else if (cmd == "q!") {
-    finish();
-  } else if (cmd == "wq" || cmd == "x") {
-    doSave();
+  // "verb[!] [argument]", e.g. "w", "w memo", "e! /notes/a.md", "wq".
+  std::string_view cmd(viCommand_, viCommandLen_);
+  while (!cmd.empty() && cmd.front() == ' ') cmd.remove_prefix(1);
+  while (!cmd.empty() && cmd.back() == ' ') cmd.remove_suffix(1);
+  const size_t space = cmd.find(' ');
+  std::string_view verb = cmd.substr(0, space);
+  std::string_view arg = space == std::string_view::npos ? std::string_view() : cmd.substr(space + 1);
+  while (!arg.empty() && arg.front() == ' ') arg.remove_prefix(1);
+  const std::string name(arg);
+
+  bool leaving = false;  // a confirm dialog or exit is pending
+  if (verb == "w") {
+    if (name.empty()) {
+      doSave();
+    } else {
+      saveAs(resolveNamedPath(name));
+    }
+  } else if (verb == "wq" || verb == "x") {
+    if (name.empty()) {
+      doSave();
+    } else {
+      saveAs(resolveNamedPath(name));
+    }
     if (!document_.isDirty()) finish();
+    leaving = true;
+  } else if (verb == "q") {
+    requestExit();  // asks before discarding unsaved changes
+    leaving = true;
+  } else if (verb == "q!") {
+    finish();
+    leaving = true;
+  } else if (verb == "e" || verb == "e!") {
+    if (name.empty()) {
+      promptOpen();  // file picker; asks before discarding unsaved changes
+    } else {
+      openNamed(resolveNamedPath(name), verb == "e!");
+    }
+    leaving = true;
   } else {
     LOG_DBG("EDTR", "Unknown vi command: %s", viCommand_);
     return;
   }
-  // Leaving (or a confirm dialog) is deferred by the activity manager; keys
+  // Leaving, dialogs and pickers are deferred by the activity manager; keys
   // still queued behind this Enter must not edit the document meanwhile.
-  if (cmd != "w") bleHid_.discardPending();
+  if (leaving) bleHid_.discardPending();
 }
 
 void EditorActivity::loop() {
@@ -1329,6 +1357,7 @@ void EditorActivity::doSave() {
   // typing a filename with the physical buttons is slow; Save As still
   // offers a custom name.
   std::string path = document_.currentPath();
+  if (path.empty()) path = filePath_;  // named by ":e newname" but not written yet
   if (path.empty()) {
     Storage.mkdir(AUTO_SAVE_DIR);
     path = makeAutoSavePath();
@@ -1398,27 +1427,52 @@ void EditorActivity::promptSaveAs() {
     const auto* kb = std::get_if<KeyboardResult>(&res.data);
     if (!kb || kb->text.empty()) return;
 
-    std::string name = kb->text;
-    if (!FsHelpers::hasTxtExtension(name) && !FsHelpers::hasMarkdownExtension(name)) {
-      name += ".txt";
-    }
-    if (filePath_.empty()) Storage.mkdir(AUTO_SAVE_DIR);
-    std::string dir = filePath_.empty() ? AUTO_SAVE_DIR : FsHelpers::extractFolderPath(filePath_);
-    if (dir.empty()) dir = "/";
-    if (dir.back() != '/') dir += "/";
-    const std::string targetPath = dir + name;
-
-    document_.flushEditHead();
-    if (document_.save(targetPath)) {
-      filePath_ = targetPath;
-      LOG_INF("EDTR", "Saved as: %s", filePath_.c_str());
-    } else {
-      LOG_ERR("EDTR", "Save As failed: %s", targetPath.c_str());
-    }
+    saveAs(resolveNamedPath(kb->text));
   };
 
   startSubActivity(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_ENTER_FILENAME), initial),
                    handler);
+}
+
+std::string EditorActivity::resolveNamedPath(const std::string& typed) const {
+  std::string name = typed;
+  if (!FsHelpers::hasTxtExtension(name) && !FsHelpers::hasMarkdownExtension(name)) {
+    name += ".txt";
+  }
+  if (name.front() == '/') return name;
+  std::string dir = filePath_.empty() ? AUTO_SAVE_DIR : FsHelpers::extractFolderPath(filePath_);
+  if (dir.empty()) dir = "/";
+  if (dir.back() != '/') dir += "/";
+  return dir + name;
+}
+
+void EditorActivity::saveAs(const std::string& path) {
+  if (path.rfind(AUTO_SAVE_DIR, 0) == 0) Storage.mkdir(AUTO_SAVE_DIR);
+  document_.flushEditHead();
+  if (document_.save(path)) {
+    filePath_ = path;
+    LOG_INF("EDTR", "Saved as: %s", filePath_.c_str());
+  } else {
+    LOG_ERR("EDTR", "Save As failed: %s", path.c_str());
+  }
+  frameDirty_ = true;
+}
+
+void EditorActivity::openNamed(const std::string& path, bool force) {
+  auto open = [this, path] {
+    if (Storage.exists(path.c_str())) {
+      switchToDocument(path);
+    } else {
+      // As in vi: a new, empty buffer that the next save creates.
+      switchToDocument("");
+      filePath_ = path;
+    }
+  };
+  if (document_.isDirty() && !force) {
+    confirmDiscardThen(open);
+  } else {
+    open();
+  }
 }
 
 void EditorActivity::switchToDocument(const std::string& newPath) {

@@ -30,7 +30,9 @@ class EditorActivity final : public Activity {
   bool preventAutoSleep() override { return true; }
 
  private:
-  std::string filePath_;  // "" for a never-saved document; kept in sync with document_.currentPath()
+  // "" for an untitled document. Normally equal to document_.currentPath(); after
+  // ":e newname" it names a file that doesn't exist yet (created by the next save).
+  std::string filePath_;
 
   GfxRenderer::Orientation savedOrientation_ = GfxRenderer::Orientation::Portrait;
   uint16_t displayWidth_ = 0;
@@ -177,7 +179,7 @@ class EditorActivity final : public Activity {
   // Consecutive Esc presses (the one leaving Insert counts). Two in a row
   // switch input to direct ASCII, so the next Insert starts in alphabet mode.
   uint8_t viEscCount_ = 0;
-  char viCommand_[24] = {};
+  char viCommand_[64] = {};
   uint8_t viCommandLen_ = 0;
   // Linewise register for dd/yy/p/P, kept on the SD card (not the heap) so
   // yanking any number of lines costs only a 128-byte stack buffer.
@@ -220,6 +222,11 @@ class EditorActivity final : public Activity {
   void showEditorMenu();
   void doSave();
   void promptSaveAs();
+  // Save-As target for a typed name: adds ".txt" when there's no .txt/.md
+  // extension; relative names go in the current file's folder (or /notes).
+  std::string resolveNamedPath(const std::string& name) const;
+  void saveAs(const std::string& path);
+  void openNamed(const std::string& path, bool force);  // ":e name" / ":e! name"
   void promptOpen();
   void promptNew();
   void requestExit();
