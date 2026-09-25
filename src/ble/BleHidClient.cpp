@@ -174,23 +174,29 @@ void BleHidClient::startScan(uint32_t durationMs) {
 }
 
 bool BleHidClient::tryBondedReconnect() {
-  // Newest bond first: NimBLE appends new bonds to the end of its store, and
-  // keyboards that take a fresh address on every re-pair leave older, dead
-  // entries in front that would each cost a full CONNECT_TIMEOUT_MS.
+  // One bond per call, round-robin, newest first (NimBLE appends new bonds to
+  // the end of its store). Each failed attempt costs a full
+  // CONNECT_TIMEOUT_MS, so trying every bond back to back would leave only a
+  // small slice of each cycle for the scan that finds a keyboard in pairing
+  // mode — keyboards that take a fresh address on every re-pair leave dead
+  // bonds behind.
   const int bonds = NimBLEDevice::getNumBonds();
-  for (int i = bonds - 1; i >= 0 && !stopRequested_; --i) {
-    const NimBLEAddress addr = NimBLEDevice::getBondedAddress(i);
-    if (addr.isNull()) continue;
-    if (connectTo(addr)) return true;
-    if (subscribeFailed_) {
-      // The link came up but the encrypted subscribe failed: the keyboard has
-      // most likely dropped our keys (re-paired elsewhere). Forget the stale
-      // bond so it can be paired afresh from pairing mode, instead of latching.
-      LOG_INF("BLEH", "Dropping stale bond %s", addr.toString().c_str());
-      NimBLEDevice::deleteBond(addr);
-      subscribeFailed_ = false;
-      return false;  // bond list changed under the index; rescan from the top
-    }
+  if (bonds <= 0) return false;
+  const int index = bonds - 1 - static_cast<int>(bondCursor_ % static_cast<uint32_t>(bonds));
+  ++bondCursor_;
+  const NimBLEAddress addr = NimBLEDevice::getBondedAddress(index);
+  if (addr.isNull()) return false;
+  if (connectTo(addr)) {
+    bondCursor_ = 0;
+    return true;
+  }
+  if (subscribeFailed_) {
+    // The link came up but the encrypted subscribe failed: the keyboard has
+    // most likely dropped our keys (re-paired elsewhere). Forget the stale
+    // bond so it can be paired afresh from pairing mode, instead of latching.
+    LOG_INF("BLEH", "Dropping stale bond %s", addr.toString().c_str());
+    NimBLEDevice::deleteBond(addr);
+    subscribeFailed_ = false;
   }
   return false;
 }
