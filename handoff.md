@@ -1,8 +1,9 @@
 # handoff.md — BLE Text Editor Feature
 
-Status: **Editor + kanji conversion shipped and published (2026-09-24).
-BLE auto-reconnect, full level-1 kanji fonts, Ctrl+S done 2026-09-25
-(committed locally, not pushed — see "Done 2026-09-25").**
+Status: **Released as 1.4.0 (2026-09-25):
+https://github.com/smalltomatowater-boop/crosspoint-reader-x3/releases/tag/1.4.0.
+The owner calls the editor feature-complete.** Everything below is on
+`master` and `feature/ble-text-editor` on `fork`.
 Fast-forwarded into `master` and pushed to the owner's fork
 (`fork` = github.com/smalltomatowater-boop/crosspoint-reader-x3; `origin` is
 upstream crosspoint-reader — nothing was pushed or PR'd there). The device
@@ -10,6 +11,40 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
 "CrossPoint Text Editor — BLE Keyboard Note-Taking Feature". Milestones M1-M4.
 
 ## Next session — start here
+
+**What the project is (owner, 2026-09-25; keep this framing in docs and
+decisions):** CrossPoint stays a *reader*. This fork adds the ability to
+*write* without giving up reading: read a book, note something in
+Japanese on the spot, save, and go back to the book, on the same device and
+firmware ("読む人は、書くこともできないと"). It is not a dedicated writing
+firmware. That's the difference from INKDECK, which is one, so the
+comparison is about what sits at the centre, not feature counts. The
+README opens with this.
+
+**Releases / OTA (set up 2026-09-25):**
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.0).
+  Release by bumping it, committing, then pushing a tag with **the same plain
+  `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
+  `sscanf("%d.%d.%d")`).
+- `.github/workflows/release.yml` (on a tag push) builds `gh_release` and
+  runs `gh release create`. The release has `firmware.bin` (OTA needs that
+  exact name), `bootloader.bin` and `partitions.bin`. Its notes are
+  `.github/release-notes-header.md` (install steps, the OTA warning,
+  roll-back) followed by the generated notes. 1.4.0's notes were edited by
+  hand to add the header, because it was tagged before the header existed.
+- `src/network/OtaUpdater.cpp` now reads **this fork's** latest release.
+  Before 1.4.0 it read upstream's, so a 1.3.0 device doing OTA would install
+  upstream 1.6.x and lose everything; the README and release notes warn about
+  this. Keep old releases: rolling back means SD-installing an earlier
+  `firmware.bin`. Since OTA now reaches every 1.4.0+ user, don't ship a
+  broken release.
+- **Still to verify on device**: SD-install the released `firmware.bin` (the
+  `gh_release` build, LOG_LEVEL=1, not the USB-flashed `default` build),
+  then check that Settings → アップデートを確認 reports up to date.
+
+**Owner decisions:** no operator+motion (`dw`, `cw`); the owner doesn't use
+them, and `v w d` / `D` / `dd` cover it (Japanese has no spaces between
+words, so `w` only stops at script changes). No typewriter scrolling.
 
 1. **Undo/redo done (2026-09-25)**: multi-level. The owner first said "one
    level is enough", then chose multi-level once vim-sized steps (a whole
@@ -26,10 +61,8 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
    **Owner-verified on device**: undo line by line in vi, Ctrl-R, redo
    cleared by new typing, `dd`+`u`, conversion+`u`. **Not yet tried**:
    Ctrl+Z/Ctrl+Y in the plain editor.
-   Next vi step per an AI review the owner pasted: operator+motion (`dw`,
-   `d$`, `cw`, `y3j`). Rewrite the motions as range-returning functions,
-   then add `d`/`c`/`y` and characterwise yank together. README.en.md
-   mirrors README.md; keep both in sync.
+   (Operator+motion was suggested by an AI review; the owner declined it,
+   see above.) README.en.md mirrors README.md; keep both in sync.
    **Vi visual mode done (2026-09-25, owner-verified)**: `v` / `V` / `Ctrl-V`
    (block), with `d x y c o`, block `I/i A/a` (the first line's typed text is
    copied to the others on Esc, in `finishBlockInsert()`), and block `p`.
