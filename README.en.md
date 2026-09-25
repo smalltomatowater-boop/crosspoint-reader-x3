@@ -2,7 +2,13 @@
 
 [日本語](README.md) | **English**
 
-**A CrossPoint Reader fork for the XTeInk X3.** Adds a Japanese UI, a tmux terminal, and a text editor you type into with a BLE keyboard (with Japanese kana-kanji conversion).
+**CrossPoint is a reader first. This fork adds the ability to write without giving up the reading experience.**
+
+> Anyone who reads should be able to write, too.
+
+This isn't firmware that turns the XTeInk X3 into a dedicated writing device. It keeps CrossPoint Reader's reading environment and adds a Japanese UI, a text editor you type into with a BLE keyboard (with Japanese kana-kanji conversion and a vi mode), and a tmux terminal.
+
+Read a book, jot down a thought on the spot, save it, and go back to the book, all on the same device and the same firmware.
 
 Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) by Dave Allie (MIT License).
 

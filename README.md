@@ -2,7 +2,13 @@
 
 **日本語** | [English](README.en.md)
 
-**XTeInk X3向けのCrossPoint Readerフォーク。** 日本語UI対応、tmuxターミナル、BLEキーボードで書けるテキストエディタ(かな漢字変換つき)を追加した魔改造版。
+**読むためのCrossPointに、書く力を。**
+
+> 読む人は、書くこともできないと。
+
+XTeInk X3を書くための専用端末に作り替えるのではありません。CrossPoint Readerの読書環境をそのまま残して、日本語UI、BLEキーボードで書けるテキストエディタ(かな漢字変換・VIモードつき)、tmuxターミナルを足したフォークです。
+
+本を読む。気になったことを、その場で日本語でメモする。保存して、また本に戻る。この流れが、同じ端末の同じファームウェアの中で完結します。
 
 Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) by Dave Allie (MIT License).
 
