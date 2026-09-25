@@ -56,6 +56,8 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 
 ### VIモード
 
+白黒反転: 設定 →「表示」→「エディタの白黒反転」で、黒背景に白文字になります。
+
 設定 →「操作」→「エディタのVIモード」をオンにすると、vi風のモード編集になります(オフなら通常のエディタのまま)。エディタはノーマルモードで始まります。
 
 - 移動: `h` `j` `k` `l`、`w` `b` `e`、`0` `^` `$`、`gg` `G`、Enter、Ctrl-F/B(1画面)、Ctrl-D/U(半画面)。`5j` のように回数も付けられます

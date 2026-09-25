@@ -2348,6 +2348,9 @@ void EditorActivity::render(RenderLock&& lock) {
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_EDITOR_MENU), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+  // White on black: flip the finished frame in place (no extra buffer).
+  if (SETTINGS.editorInvert) renderer.invertScreen();
+
   renderer.displayBuffer(fullRefreshNeeded_ ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
   frameDirty_ = false;
   fullRefreshNeeded_ = false;

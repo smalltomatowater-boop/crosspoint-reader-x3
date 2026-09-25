@@ -57,6 +57,8 @@ Device buttons: "Menu" opens Save / Save As / Open / New / Exit. "« Home" leave
 
 ### Vi mode
 
+White on black: Settings → "Display" → "Editor White on Black".
+
 Turn on Settings → "Controls" → "Editor Vi Mode" for vi-style modal editing. With it off, the editor works as described above. With it on, the editor starts in Normal mode.
 
 - Motion: `h` `j` `k` `l`, `w` `b` `e`, `0` `^` `$`, `gg` `G`, Enter, Ctrl-F/B (one screen), Ctrl-D/U (half a screen). Counts work too, e.g. `5j`. In Japanese text, `w` / `b` stop where the script changes (hiragana, katakana, kanji).

@@ -193,6 +193,8 @@ class CrossPointSettings {
   uint8_t textAntiAliasing = 1;
   // Text editor: vi-style modal editing (Normal/Insert/":" command line)
   uint8_t editorViMode = 0;
+  // Text editor: white text on black
+  uint8_t editorInvert = 0;
   // Short power button click behaviour
   uint8_t shortPwrBtn = IGNORE;
   // EPUB reading orientation settings

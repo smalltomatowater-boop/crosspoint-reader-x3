@@ -45,15 +45,22 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
    content; drawing itself is ~17ms.
    Next idea from the owner: **typewriter scrolling** (keep the cursor row
    at a fixed height). No RAM needed; more full-screen shifts on e-ink.
-   **Next feature candidates** (owner picks): vi visual mode
-   (owner would like blockwise/rectangle selection too), text selection and
-   copy/paste in the plain editor; passkey display for keyboards that
-   require MITM (FreeInk SDK `BleKeyboardHost.cpp:309-370`, MIT:
-   `setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY)` + `onPassKeyDisplay`, show the
-   code in the status row). **INKDECK (github.com/Free-Ink/inkdeck) has no
-   license — read it for ideas, don't copy its code.** Keep what we already
-   do better than INKDECK: Japanese input, no document size cap (INKDECK
-   truncates at 16KB), crash-safe save (INKDECK overwrites with `O_TRUNC`).
+   **Editor white-on-black (2026-09-25, owner likes it)**: Settings →
+   表示 → エディタの白黒反転 (`SETTINGS.editorInvert`). `render()` calls
+   `renderer.invertScreen()` on the finished frame; no extra RAM.
+   **Owner: the editor is feature-complete.** Typewriter scrolling was
+   dropped. Remaining ideas if wanted: operator+motion (`dw`, `cw`), passkey
+   display for MITM keyboards.
+   **Heap fragmentation after the editor (fixed 2026-09-25)**: the XTC
+   reader showed メモリエラー after the editor had been used. Its 52,272-byte
+   page buffer (792/8 × 528) needs one contiguous block, and the largest
+   block had dropped from 114,676 (fresh boot) to 51,188. Cause:
+   `NimBLEDevice::deinit(false)` keeps `m_pScan`, including every advertised
+   device found (NimBLEDevice.cpp:1044-1070). Now `deinit(true)`. After the
+   editor the largest block is 77,812, so XTC opens (the p1-in-heap,
+   p2-via-framebuffer path). The two-plane single allocation (~104KB) still
+   isn't possible after BLE use: something else in NimBLE/the controller
+   stays allocated. Not yet found.
 2. **Heap**: ~18KB free with the keyboard connected, under the 50KB rule —
    see "Heap budget" for measurements and candidate fixes (passive scan,
    shorter scan window, NimBLE config).

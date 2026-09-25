@@ -1,5 +1,6 @@
 #include "BleHidClient.h"
 
+#include <Arduino.h>
 #include <Logging.h>
 #include <NimBLERemoteCharacteristic.h>
 #include <NimBLERemoteService.h>
@@ -254,7 +255,11 @@ void BleHidClient::bleTaskRun() {
   }
   delete device_;
   device_ = nullptr;
-  NimBLEDevice::deinit(false);
+  // clearAll=true: with false NimBLE keeps its scan object (and every
+  // advertised device the scan found) on the heap after deinit. Left in the
+  // middle of the heap, that split the largest free block from ~114KB to
+  // ~51KB, so the XTC reader's 52KB page buffer failed after using the editor.
+  NimBLEDevice::deinit(true);
   LOG_INF("BLEH", "BLE task done");
 }
 
@@ -294,6 +299,7 @@ void BleHidClient::stop() {
   if (keyQueue_) {
     vQueueDelete(keyQueue_);
     keyQueue_ = nullptr;
+    LOG_DBG("BLEH", "Stopped: free %u, largest block %u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   }
   bleRunning_ = false;
   instance_ = nullptr;
