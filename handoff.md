@@ -17,6 +17,30 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
    on device first; a likely fix is to also accept
    `NimBLEDevice::isBonded(device->getAddress())`. Watch for resolvable
    private addresses (NimBLE needs the IRK from the bond to resolve them).
+
+   **Better design found (2026-09-25, compared with INKDECK):** the FreeInk
+   SDK's `BleKeyboardHost` (github.com/Free-Ink/freeink-sdk,
+   `libs/network/BleKeyboardHost/src/BleKeyboardHost.cpp`, **MIT**) doesn't
+   rely on scanning to reconnect at all. It persists each bonded device's
+   address *and address type* in NVS and, while disconnected, calls
+   `connect()` directly on the stored address every 4 s, round-robin over
+   bonds (`:516-523`, `kReconnectBackoffMs`). Its scan filter also accepts a
+   keyboard `appearance`, not just the HID service UUID (`:287`). Plan: store
+   the bonded address+type after a successful pairing, try a direct connect
+   on `begin()`/disconnect, and fall back to scanning only when there is no
+   bond. Other ideas from the same library: passkey display for
+   MITM-requiring keyboards (`setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY)` +
+   `onPassKeyDisplay`, `:309-370`; show the code in the status row) and
+   `CONFIG_BT_NIMBLE_EXT_ADV=1` (BLE 5 extended-advertising scan) in
+   INKDECK's `platformio.ini`. The SDK is MIT, so borrowing code needs its
+   copyright notice. **INKDECK itself (github.com/Free-Ink/inkdeck) has no
+   license — read it for ideas, don't copy its code.**
+
+   Also worth taking from INKDECK's editor, lower priority: Ctrl-S to save and
+   Esc to leave (no reaching for the device buttons), text selection and
+   copy/paste. Things we already do better and should keep: Japanese input,
+   documents with no size cap (INKDECK truncates at a fixed 16KB buffer), and
+   crash-safe save (INKDECK overwrites the file in place with `O_TRUNC`).
 2. **Heap**: ~18KB free with the keyboard connected, under the 50KB rule —
    see "Heap budget" for measurements and candidate fixes (passive scan,
    shorter scan window, NimBLE config).
