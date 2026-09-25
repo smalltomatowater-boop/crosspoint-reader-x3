@@ -1,6 +1,8 @@
 # handoff.md — BLE Text Editor Feature
 
-Status: **Editor + kanji conversion shipped and published (2026-09-24).**
+Status: **Editor + kanji conversion shipped and published (2026-09-24).
+BLE auto-reconnect, full level-1 kanji fonts, Ctrl+S done 2026-09-25
+(committed locally, not pushed — see "Done 2026-09-25").**
 Fast-forwarded into `master` and pushed to the owner's fork
 (`fork` = github.com/smalltomatowater-boop/crosspoint-reader-x3; `origin` is
 upstream crosspoint-reader — nothing was pushed or PR'd there). The device
@@ -9,38 +11,14 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
 
 ## Next session — start here
 
-1. **BLE auto-reconnect doesn't work** (owner: has to put the keyboard in
-   pairing mode every time the editor opens). Unverified hypothesis: a
-   bonded keyboard reconnects with advertising that omits the HID service
-   UUID, and `BleHidClient::onResult()` drops any device without it
-   (`if (!device->haveServiceUUID()) return;`). Check the raw scan results
-   on device first; a likely fix is to also accept
-   `NimBLEDevice::isBonded(device->getAddress())`. Watch for resolvable
-   private addresses (NimBLE needs the IRK from the bond to resolve them).
-
-   **Better design found (2026-09-25, compared with INKDECK):** the FreeInk
-   SDK's `BleKeyboardHost` (github.com/Free-Ink/freeink-sdk,
-   `libs/network/BleKeyboardHost/src/BleKeyboardHost.cpp`, **MIT**) doesn't
-   rely on scanning to reconnect at all. It persists each bonded device's
-   address *and address type* in NVS and, while disconnected, calls
-   `connect()` directly on the stored address every 4 s, round-robin over
-   bonds (`:516-523`, `kReconnectBackoffMs`). Its scan filter also accepts a
-   keyboard `appearance`, not just the HID service UUID (`:287`). Plan: store
-   the bonded address+type after a successful pairing, try a direct connect
-   on `begin()`/disconnect, and fall back to scanning only when there is no
-   bond. Other ideas from the same library: passkey display for
-   MITM-requiring keyboards (`setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY)` +
-   `onPassKeyDisplay`, `:309-370`; show the code in the status row) and
-   `CONFIG_BT_NIMBLE_EXT_ADV=1` (BLE 5 extended-advertising scan) in
-   INKDECK's `platformio.ini`. The SDK is MIT, so borrowing code needs its
-   copyright notice. **INKDECK itself (github.com/Free-Ink/inkdeck) has no
-   license — read it for ideas, don't copy its code.**
-
-   Also worth taking from INKDECK's editor, lower priority: Ctrl-S to save and
-   Esc to leave (no reaching for the device buttons), text selection and
-   copy/paste. Things we already do better and should keep: Japanese input,
-   documents with no size cap (INKDECK truncates at a fixed 16KB buffer), and
-   crash-safe save (INKDECK overwrites the file in place with `O_TRUNC`).
+1. **Next feature candidates** (owner picks): text selection and
+   copy/paste; Esc to leave the editor; passkey display for keyboards that
+   require MITM (FreeInk SDK `BleKeyboardHost.cpp:309-370`, MIT:
+   `setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY)` + `onPassKeyDisplay`, show the
+   code in the status row). **INKDECK (github.com/Free-Ink/inkdeck) has no
+   license — read it for ideas, don't copy its code.** Keep what we already
+   do better than INKDECK: Japanese input, no document size cap (INKDECK
+   truncates at 16KB), crash-safe save (INKDECK overwrites with `O_TRUNC`).
 2. **Heap**: ~18KB free with the keyboard connected, under the 50KB rule —
    see "Heap budget" for measurements and candidate fixes (passive scan,
    shorter scan window, NimBLE config).
@@ -49,6 +27,53 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
 4. Leftovers: `STR_SAVED`/`STR_SAVE_FAILED` exist but nothing shows a save
    result on screen; candidate order is the dictionary's (no frequency
    learning); no bunsetsu segmentation.
+
+## Done 2026-09-25 (verified on device, committed, **not pushed**)
+
+Unpushed commits on `feature/ble-text-editor`: 4ff5f378 (docs), f3c2acac,
+68912afb, b39ec145, a4702b8c, plus this handoff update. Push to `fork`
+only when the owner asks.
+
+- **BLE auto-reconnect** (`src/ble/BleHidClient.cpp`, f3c2acac + b39ec145).
+  While disconnected, the BLE task makes a direct `connect()` to one bonded
+  address per cycle (round-robin, newest bond first; NimBLE appends new
+  bonds at the end of its store), then does a 5s scan. With no bonds it
+  only scans, for 10s. Connect timeout 8s (NimBLE default is 30s),
+  `setConnectionParams(12,24,0,800)` = 8s supervision timeout. `stop()`
+  calls `cancelConnect()` if a connect is in flight and waits up to 10s.
+  `onResult()` also accepts bonded addresses without the HID UUID. If the
+  link comes up but the subscribe fails on a bonded address, that bond is
+  deleted (stale keys). Owner verified: reconnects without pairing mode,
+  fast.
+  - The owner's keyboard takes a **new address on every re-pair**
+    (d7:73:d9:df:c0:00, c1:00, c2:00 were all bonded), so dead bonds pile
+    up. The first version tried every bond back to back (8s each), which
+    left a 5s scan slot in a ~29s cycle and made pairing mode slow — hence
+    one bond per cycle. A "forget keyboards" menu item (deleteAllBonds)
+    would be a reasonable addition.
+- **Migu UI fonts were missing 527 JIS level-1 kanji** (68912afb). 愛, 亜,
+  海, 気, 心, 山, 年, 百, 食, 法, ... drew as blank gaps everywhere the
+  Migu font is used (Japanese UI, terminal, editor). The unrecorded
+  original generator had a shifted kanji range: it included 32 row-48
+  (level-2) kanji instead. New `scripts/build_migu_ui_fonts.py` regenerates
+  `lib/EpdFont/builtinFonts/migu1m_term_{08,10,12}.h` with all 2965 level-1
+  kanji, from `~/Library/Fonts/migu-1m-{regular,bold}.ttf`. The old ranges
+  reproduce the old files byte-for-byte, so only the coverage changed.
+  Flash +0.5MB (51.5% of app partition), no RAM change (fonts are read from
+  flash). `migu1m_term_8.h` (no leading zero) is an unused leftover.
+- **Conversion candidates the font can't draw are dropped**
+  (`EpdFont::hasGlyph`, `GfxRenderer::canRenderText`, filter in
+  `EditorActivity::convertStep`). SKK-JISYO.L lists rare level-2+ kanji
+  (瞹, 靉, 欸, ...) that used to show as big blank gaps in the candidate row.
+  Level-2 kanji can't be typed until the font covers them (~+1MB flash for
+  all three sizes; there's room).
+- **Ctrl+S saves** (a4702b8c): commits any composition, then `doSave()`.
+  Other Ctrl+letter combos are swallowed; before this they typed the bare
+  letter.
+- An untitled save is named `memo-NNN.txt` when the DS3231 has no date.
+  The date is written only by an NTP sync (Wi-Fi connect or Settings →
+  「今すぐ時計を同期」). This is by design, not a bug; the owner synced and
+  got timestamp names.
 
 CI facts learned the hard way (2026-09-25): `pio check` in CI runs with
 `--fail-on-defect low` — even a low-severity style nit fails the build, so
