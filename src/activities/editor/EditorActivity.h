@@ -62,6 +62,8 @@ class EditorActivity final : public Activity {
   bool lastBleConnected_ = false;
   bool lastBleScanning_ = false;
   void onBleKey(const HidKeyEvent& ev);
+  // Shared tail of every key: relayout, scroll, goal column, repaint.
+  void afterKey(bool contentChanged, bool cursorMoved, bool isVertical);
   static void bleEventTrampoline(void* ctx, const HidKeyEvent& ev);
 
   // Migu 1M 12pt (owner's choice: 60x17 cells, readability over row count),
@@ -159,6 +161,48 @@ class EditorActivity final : public Activity {
   void convertStep(int dir);                 // Space (+1) / Shift+Space (-1)
   void revertConversion();                   // back to the hiragana reading
   void replaceComposition(const std::string& text);
+
+  // ==========================================================================
+  // Vi mode (Settings > Controls > Editor Vi Mode)
+  // ==========================================================================
+
+  // Insert is the plain editor (romaji-kana, conversion); Esc with nothing
+  // being composed switches to Normal. Normal keys are ASCII commands
+  // whatever the kana mode is; ":" opens a one-line command (w, q, q!, wq).
+  enum class ViMode { Insert, Normal, Command };
+  bool viEnabled_ = false;  // read from SETTINGS in onEnter()
+  ViMode viMode_ = ViMode::Insert;
+  char viPending_ = 0;    // first key of a two-key command: 'd', 'y' or 'g'
+  uint16_t viCount_ = 0;  // numeric prefix ("3j", "2dd"); 0 = none
+  // Consecutive Esc presses (the one leaving Insert counts). Two in a row
+  // switch input to direct ASCII, so the next Insert starts in alphabet mode.
+  uint8_t viEscCount_ = 0;
+  char viCommand_[24] = {};
+  uint8_t viCommandLen_ = 0;
+  // Linewise register for dd/yy/p/P, kept on the SD card (not the heap) so
+  // yanking any number of lines costs only a 128-byte stack buffer.
+  // Always ends in '\n' when non-empty.
+  static constexpr const char* VI_YANK_PATH = "/.crosspoint/edit/yank.txt";
+  uint32_t viYankLen_ = 0;  // bytes in the register file; 0 = empty. Reloaded in onEnter().
+
+  // Returns false for keys Normal mode leaves to the regular handler
+  // (arrows, Home/End, PgUp/PgDn, Delete).
+  bool handleViNormalKey(const HidKeyEvent& ev, bool& contentChanged, bool& cursorMoved, bool& isVertical);
+  void handleViCommandKey(const HidKeyEvent& ev);
+  void runViCommand();
+  void enterViNormal();
+
+  char byteAt(uint32_t pos);
+  uint32_t lineStartOf(uint32_t pos);
+  uint32_t lineEndOf(uint32_t pos);  // offset of the line's '\n', or length()
+  int charClassAt(uint32_t pos);     // word-motion class of the codepoint at pos
+  void viWordForward();
+  void viWordBackward();
+  void viWordEnd();
+  void viDeleteLines(uint32_t count);
+  void viYankLines(uint32_t count);
+  void viPut(bool below);
+  uint32_t insertYankAt(uint32_t at, uint32_t count);  // first `count` register bytes; returns bytes inserted
 
   // ==========================================================================
   // Menu / file actions (M2)

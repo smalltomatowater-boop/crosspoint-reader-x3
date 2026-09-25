@@ -10,6 +10,8 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cctype>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -28,13 +30,15 @@ namespace {
 // common punctuation keys, and the plain navigation/control keys) — the JIS
 // international usages (Henkan/Muhenkan/Katakana toggle, ~0x87-0x92) are left
 // unmapped because their exact assignments aren't something to guess at without a
-// device to verify against (see CLAUDE.md's anti-hallucination rule). Tab instead
-// cycles Hiragana -> Katakana -> ASCII input mode, which needs no JIS-specific
-// knowledge and works on any keyboard.
+// device to verify against (see CLAUDE.md's anti-hallucination rule). Caps Lock
+// (standard usage 0x39, on every keyboard) instead cycles Hiragana -> Katakana ->
+// ASCII input mode; the host never sets the Caps Lock LED/state, so letters are
+// unaffected. Tab inserts four spaces (the font has no tab glyph).
 constexpr uint8_t HID_ENTER = 0x28;
 constexpr uint8_t HID_ESCAPE = 0x29;
 constexpr uint8_t HID_BACKSPACE = 0x2A;
 constexpr uint8_t HID_TAB = 0x2B;
+constexpr uint8_t HID_CAPS_LOCK = 0x39;
 constexpr uint8_t HID_SPACE = 0x2C;
 constexpr uint8_t HID_DELETE = 0x4C;
 constexpr uint8_t HID_HOME = 0x4A;
@@ -47,7 +51,11 @@ constexpr uint8_t HID_DOWN = 0x51;
 constexpr uint8_t HID_UP = 0x52;
 
 constexpr uint8_t HID_A = 0x04;
+constexpr uint8_t HID_B = 0x05;
+constexpr uint8_t HID_D = 0x07;
+constexpr uint8_t HID_F = 0x09;
 constexpr uint8_t HID_S = 0x16;
+constexpr uint8_t HID_U = 0x18;
 constexpr uint8_t HID_Z = 0x1D;
 
 constexpr uint8_t MOD_LCTRL = 0x01;
@@ -152,6 +160,15 @@ void EditorActivity::onEnter() {
   displayHeight_ = renderer.getDisplayHeight();
 
   applyFontMetrics();
+
+  viEnabled_ = SETTINGS.editorViMode != 0;
+  viMode_ = viEnabled_ ? ViMode::Normal : ViMode::Insert;
+  viYankLen_ = 0;
+  if (viEnabled_ && Storage.exists(VI_YANK_PATH)) {
+    // The register survives power-off: pick up the last yank from the SD card.
+    HalFile yank;
+    if (Storage.openFileForRead("EDTR", VI_YANK_PATH, yank)) viYankLen_ = static_cast<uint32_t>(yank.fileSize());
+  }
 
   if (!document_.open(filePath_)) {
     LOG_ERR("EDTR", "Failed to open document: %s — starting blank", filePath_.c_str());
@@ -326,7 +343,7 @@ void EditorActivity::insertText(const std::string& text) {
 void EditorActivity::onBleKey(const HidKeyEvent& ev) {
   bool contentChanged = false;
   bool cursorMoved = false;
-  const bool isVertical =
+  bool isVertical =
       (ev.usage == HID_UP || ev.usage == HID_DOWN || ev.usage == HID_PAGE_UP || ev.usage == HID_PAGE_DOWN);
 
   // Ctrl shortcuts. Unbound Ctrl+letter combos are swallowed rather than
@@ -335,15 +352,53 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
     if (ev.usage == HID_S) {
       commitComposition();  // save what is on screen, not a half-typed reading
       doSave();
+    } else if (viEnabled_ && viMode_ == ViMode::Normal) {
+      // vi scrolling: Ctrl-F/B a screen, Ctrl-D/U half a screen.
+      int rows = 0;
+      if (ev.usage == HID_F) rows = maxRows_;
+      if (ev.usage == HID_B) rows = -static_cast<int>(maxRows_);
+      if (ev.usage == HID_D) rows = maxRows_ / 2;
+      if (ev.usage == HID_U) rows = -static_cast<int>(maxRows_ / 2);
+      if (rows != 0) {
+        moveCursorVertically(rows);
+        afterKey(false, true, true);
+      }
     }
     return;
   }
 
+  if (viEnabled_) {
+    if (viMode_ == ViMode::Command) {
+      handleViCommandKey(ev);
+      return;
+    }
+    if (viMode_ == ViMode::Normal) {
+      if (handleViNormalKey(ev, contentChanged, cursorMoved, isVertical)) {
+        afterKey(contentChanged, cursorMoved, isVertical);
+        return;
+      }
+      // Arrows, Home/End, PgUp/PgDn and Delete fall through to the regular handling.
+    } else if (ev.usage == HID_ESCAPE && compose_ != ComposeState::Converting) {
+      // One Esc leaves Insert: kana typed so far is committed as shown (a
+      // pending "n" becomes ん), not discarded. Only while a candidate is
+      // shown does Esc first go back to the reading (below).
+      enterViNormal();
+      afterKey(false, true, false);
+      return;
+    }
+  }
+
   switch (ev.usage) {
-    case HID_TAB:
+    case HID_CAPS_LOCK:
       cycleInputMode();
       frameDirty_ = true;
       return;
+
+    case HID_TAB:
+      commitComposition();
+      insertText("    ");
+      contentChanged = true;
+      break;
 
     case HID_ENTER: {
       // In a composition, Enter confirms it (like any IME); otherwise newline.
@@ -471,6 +526,10 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
     }
   }
 
+  afterKey(contentChanged, cursorMoved, isVertical);
+}
+
+void EditorActivity::afterKey(bool contentChanged, bool cursorMoved, bool isVertical) {
   if (contentChanged) {
     lastEditTime_ = millis();
     idleMaintenanceDone_ = false;
@@ -482,6 +541,448 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
     if (!isVertical) goalCol_ = cursorCol_;
     frameDirty_ = true;
   }
+}
+
+// ============================================================================
+// Vi mode
+// ============================================================================
+
+char EditorActivity::byteAt(uint32_t pos) {
+  char c = 0;
+  if (pos < document_.length()) document_.readAt(pos, &c, 1);
+  return c;
+}
+
+uint32_t EditorActivity::lineStartOf(uint32_t pos) {
+  char buf[64];
+  while (pos > 0) {
+    const uint32_t n = std::min<uint32_t>(sizeof(buf), pos);
+    const uint32_t got = document_.readAt(pos - n, buf, n);
+    if (got != n) return 0;
+    for (uint32_t i = n; i > 0; --i) {
+      if (buf[i - 1] == '\n') return pos - n + i;
+    }
+    pos -= n;
+  }
+  return 0;
+}
+
+uint32_t EditorActivity::lineEndOf(uint32_t pos) {
+  const uint32_t len = document_.length();
+  char buf[64];
+  while (pos < len) {
+    const uint32_t n = std::min<uint32_t>(sizeof(buf), len - pos);
+    const uint32_t got = document_.readAt(pos, buf, n);
+    if (got == 0) return len;
+    const auto* nl = static_cast<const char*>(memchr(buf, '\n', got));
+    if (nl) return pos + static_cast<uint32_t>(nl - buf);
+    pos += got;
+  }
+  return len;
+}
+
+int EditorActivity::charClassAt(uint32_t pos) {
+  char buf[4];
+  const uint32_t got = document_.readAt(pos, buf, sizeof(buf));
+  if (got == 0) return 0;
+  uint32_t cpLen;
+  const uint32_t cp = decodeUtf8At(buf, got, cpLen);
+  if (cp == ' ' || cp == '\t' || cp == '\n' || cp == 0x3000) return 0;  // blank (incl. ideographic space)
+  if (cp < 0x80) return (isalnum(static_cast<int>(cp)) || cp == '_') ? 1 : 2;
+  if (cp >= 0x3040 && cp <= 0x309F) return 3;                                      // hiragana
+  if ((cp >= 0x30A0 && cp <= 0x30FF) || (cp >= 0xFF66 && cp <= 0xFF9F)) return 4;  // katakana, ー
+  if ((cp >= 0x4E00 && cp <= 0x9FFF) || cp == 0x3005) return 5;                    // kanji, 々
+  return 6;                                                                        // other (、。「」 etc.)
+}
+
+void EditorActivity::viWordForward() {
+  const uint32_t len = document_.length();
+  const int cls = charClassAt(cursorPos_);
+  if (cls != 0) {
+    while (cursorPos_ < len && charClassAt(cursorPos_) == cls) cursorPos_ += nextCodepointLen(cursorPos_);
+  }
+  while (cursorPos_ < len && charClassAt(cursorPos_) == 0) cursorPos_ += nextCodepointLen(cursorPos_);
+}
+
+void EditorActivity::viWordBackward() {
+  if (cursorPos_ == 0) return;
+  cursorPos_ -= prevCodepointLen(cursorPos_);
+  while (cursorPos_ > 0 && charClassAt(cursorPos_) == 0) cursorPos_ -= prevCodepointLen(cursorPos_);
+  const int cls = charClassAt(cursorPos_);
+  while (cursorPos_ > 0) {
+    const uint32_t prev = cursorPos_ - prevCodepointLen(cursorPos_);
+    if (charClassAt(prev) != cls) break;
+    cursorPos_ = prev;
+  }
+}
+
+void EditorActivity::viWordEnd() {
+  const uint32_t len = document_.length();
+  if (cursorPos_ >= len) return;
+  cursorPos_ += nextCodepointLen(cursorPos_);
+  while (cursorPos_ < len && charClassAt(cursorPos_) == 0) cursorPos_ += nextCodepointLen(cursorPos_);
+  if (cursorPos_ >= len) return;
+  const int cls = charClassAt(cursorPos_);
+  while (true) {
+    const uint32_t next = cursorPos_ + nextCodepointLen(cursorPos_);
+    if (next >= len || charClassAt(next) != cls) break;
+    cursorPos_ = next;
+  }
+}
+
+void EditorActivity::viYankLines(uint32_t count) {
+  const uint32_t len = document_.length();
+  const uint32_t start = lineStartOf(cursorPos_);
+  uint32_t end = start;
+  for (uint32_t i = 0; i < count && end < len; ++i) {
+    end = lineEndOf(end);
+    if (end < len) ++end;  // take the '\n'
+  }
+
+  viYankLen_ = 0;
+  HalFile file;
+  if (!Storage.openFileForWrite("EDTR", VI_YANK_PATH, file)) {
+    LOG_ERR("EDTR", "Yank: cannot open %s", VI_YANK_PATH);
+    return;
+  }
+  char buf[128];
+  uint32_t written = 0;
+  char last = 0;
+  for (uint32_t pos = start; pos < end;) {
+    const uint32_t got = document_.readAt(pos, buf, std::min<uint32_t>(sizeof(buf), end - pos));
+    if (got == 0 || file.write(buf, got) != got) {
+      LOG_ERR("EDTR", "Yank: write failed at %u", pos);
+      return;
+    }
+    last = buf[got - 1];
+    written += got;
+    pos += got;
+  }
+  // The register always holds whole lines ending in '\n', so put never has
+  // to guess where a line break goes.
+  if (written == 0 || last != '\n') {
+    if (file.write("\n", 1) != 1) {
+      LOG_ERR("EDTR", "Yank: write failed");
+      return;
+    }
+    ++written;
+  }
+  viYankLen_ = written;
+}
+
+uint32_t EditorActivity::insertYankAt(uint32_t at, uint32_t count) {
+  HalFile file;
+  if (!Storage.openFileForRead("EDTR", VI_YANK_PATH, file)) {
+    LOG_ERR("EDTR", "Put: cannot open %s", VI_YANK_PATH);
+    return 0;
+  }
+  char buf[128];
+  uint32_t inserted = 0;
+  while (inserted < count) {
+    const int got = file.read(buf, std::min<uint32_t>(sizeof(buf), count - inserted));
+    if (got <= 0) break;
+    // Chunks may split a UTF-8 sequence; the piece table stores bytes, and the
+    // pieces end up adjacent, so the text is whole again once all are in.
+    if (!document_.insertAt(at + inserted, std::string_view(buf, static_cast<size_t>(got)))) {
+      LOG_ERR("EDTR", "Put: insert failed at %u", at + inserted);
+      break;
+    }
+    inserted += static_cast<uint32_t>(got);
+  }
+  return inserted;
+}
+
+void EditorActivity::viDeleteLines(uint32_t count) {
+  viYankLines(count);
+  const uint32_t len = document_.length();
+  uint32_t start = lineStartOf(cursorPos_);
+  uint32_t end = start;
+  for (uint32_t i = 0; i < count && end < len; ++i) {
+    end = lineEndOf(end);
+    if (end < len) ++end;
+  }
+  // Deleting the last line: take the '\n' before it instead of after.
+  if (end == len && start > 0 && (end == start || byteAt(end - 1) != '\n')) --start;
+  document_.deleteAt(start, end - start);
+  cursorPos_ = lineStartOf(std::min(start, document_.length()));
+}
+
+void EditorActivity::viPut(bool below) {
+  if (viYankLen_ == 0) return;
+  uint32_t at = lineStartOf(cursorPos_);
+  if (below) {
+    at = lineEndOf(cursorPos_);
+    if (at < document_.length()) {
+      ++at;
+    } else {
+      // Last line has no '\n': add one, then the register minus its own.
+      if (!document_.insertAt(at, "\n")) return;
+      ++at;
+      insertYankAt(at, viYankLen_ - 1);
+      cursorPos_ = at;
+      return;
+    }
+  }
+  insertYankAt(at, viYankLen_);
+  cursorPos_ = at;
+}
+
+void EditorActivity::enterViNormal() {
+  commitComposition();
+  romajiKana_.clear();
+  viMode_ = ViMode::Normal;
+  viPending_ = 0;
+  viCount_ = 0;
+  viEscCount_ = 1;  // the Esc that got us here
+  // As in vi, leaving Insert steps back onto the last typed character.
+  if (cursorPos_ > lineStartOf(cursorPos_)) cursorPos_ -= prevCodepointLen(cursorPos_);
+}
+
+bool EditorActivity::handleViNormalKey(const HidKeyEvent& ev, bool& contentChanged, bool& cursorMoved,
+                                       bool& isVertical) {
+  switch (ev.usage) {
+    case HID_UP:
+    case HID_DOWN:
+    case HID_LEFT:
+    case HID_RIGHT:
+    case HID_HOME:
+    case HID_END:
+    case HID_PAGE_UP:
+    case HID_PAGE_DOWN:
+    case HID_DELETE:
+      viPending_ = 0;
+      viCount_ = 0;
+      viEscCount_ = 0;
+      return false;
+    case HID_ESCAPE:
+      viPending_ = 0;
+      viCount_ = 0;
+      if (++viEscCount_ >= 2) {
+        viEscCount_ = 0;
+        inputMode_ = InputMode::Ascii;
+        romajiKana_.clear();
+        cursorMoved = true;  // repaint the mode indicator
+      }
+      return true;
+    default:
+      break;
+  }
+  viEscCount_ = 0;
+
+  char ch = 0;
+  if (ev.usage == HID_ENTER) {
+    ch = '+';
+  } else if (ev.usage == HID_SPACE) {
+    ch = 'l';
+  } else if (ev.usage == HID_BACKSPACE) {
+    ch = 'h';
+  } else if (!hidUsageToAscii(ev.usage, ev.mods, ch)) {
+    return true;  // Caps Lock, Tab etc.: nothing in Normal mode
+  }
+
+  if ((ch >= '1' && ch <= '9') || (ch == '0' && viCount_ > 0)) {
+    viCount_ = static_cast<uint16_t>(std::min(999, viCount_ * 10 + (ch - '0')));
+    return true;
+  }
+  const char pending = viPending_;
+  viPending_ = 0;
+  if (!pending && (ch == 'd' || ch == 'y' || ch == 'g')) {
+    viPending_ = ch;  // keeps viCount_ for "3dd"
+    return true;
+  }
+  const uint32_t count = viCount_ ? viCount_ : 1;
+  viCount_ = 0;
+  const uint32_t len = document_.length();
+  cursorMoved = true;  // mode/cursor changes all repaint
+
+  if (pending == 'd') {
+    if (ch == 'd') {
+      viDeleteLines(count);
+      contentChanged = true;
+    }
+    return true;
+  }
+  if (pending == 'y') {
+    if (ch == 'y') viYankLines(count);
+    return true;
+  }
+  if (pending == 'g') {
+    if (ch == 'g') cursorPos_ = 0;
+    return true;
+  }
+
+  // Keeps the Normal-mode cursor on a character, not on a line's '\n'.
+  auto clampToLine = [this]() {
+    const uint32_t ls = lineStartOf(cursorPos_);
+    if ((cursorPos_ >= document_.length() || byteAt(cursorPos_) == '\n') && cursorPos_ > ls) {
+      cursorPos_ -= prevCodepointLen(cursorPos_);
+    }
+  };
+  auto firstNonBlank = [this](uint32_t pos) {
+    const uint32_t end = lineEndOf(pos);
+    while (pos < end && (byteAt(pos) == ' ' || byteAt(pos) == '\t')) ++pos;
+    return pos;
+  };
+
+  switch (ch) {
+    case 'h':
+      for (uint32_t i = 0; i < count && cursorPos_ > lineStartOf(cursorPos_); ++i) {
+        cursorPos_ -= prevCodepointLen(cursorPos_);
+      }
+      break;
+    case 'l':
+      for (uint32_t i = 0; i < count && cursorPos_ < len && byteAt(cursorPos_) != '\n'; ++i) {
+        const uint32_t next = cursorPos_ + nextCodepointLen(cursorPos_);
+        if (next >= len || byteAt(next) == '\n') break;
+        cursorPos_ = next;
+      }
+      break;
+    case 'j':
+      moveCursorVertically(static_cast<int>(count));
+      isVertical = true;
+      break;
+    case 'k':
+      moveCursorVertically(-static_cast<int>(count));
+      isVertical = true;
+      break;
+    case '+':  // Enter: first non-blank of the next line
+      for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t e = lineEndOf(cursorPos_);
+        if (e >= len) break;
+        cursorPos_ = e + 1;
+      }
+      cursorPos_ = firstNonBlank(lineStartOf(cursorPos_));
+      break;
+    case '0':
+      cursorPos_ = lineStartOf(cursorPos_);
+      break;
+    case '^':
+      cursorPos_ = firstNonBlank(lineStartOf(cursorPos_));
+      break;
+    case '$':
+      cursorPos_ = lineEndOf(cursorPos_);
+      clampToLine();
+      break;
+    case 'w':
+      for (uint32_t i = 0; i < count; ++i) viWordForward();
+      clampToLine();
+      break;
+    case 'b':
+      for (uint32_t i = 0; i < count; ++i) viWordBackward();
+      break;
+    case 'e':
+      for (uint32_t i = 0; i < count; ++i) viWordEnd();
+      break;
+    case 'G':
+      cursorPos_ = lineStartOf(len);
+      break;
+    case 'x':
+      for (uint32_t i = 0; i < count && cursorPos_ < document_.length() && byteAt(cursorPos_) != '\n'; ++i) {
+        document_.deleteAt(cursorPos_, nextCodepointLen(cursorPos_));
+        contentChanged = true;
+      }
+      clampToLine();
+      break;
+    case 'D': {
+      const uint32_t e = lineEndOf(cursorPos_);
+      if (e > cursorPos_) {
+        document_.deleteAt(cursorPos_, e - cursorPos_);
+        contentChanged = true;
+      }
+      clampToLine();
+      break;
+    }
+    case 'p':
+    case 'P':
+      viPut(ch == 'p');
+      contentChanged = true;
+      break;
+    case 'a':
+      if (cursorPos_ < len && byteAt(cursorPos_) != '\n') cursorPos_ += nextCodepointLen(cursorPos_);
+      viMode_ = ViMode::Insert;
+      break;
+    case 'i':
+      viMode_ = ViMode::Insert;
+      break;
+    case 'A':
+      cursorPos_ = lineEndOf(cursorPos_);
+      viMode_ = ViMode::Insert;
+      break;
+    case 'I':
+      cursorPos_ = firstNonBlank(lineStartOf(cursorPos_));
+      viMode_ = ViMode::Insert;
+      break;
+    case 'o':
+      cursorPos_ = lineEndOf(cursorPos_);
+      insertText("\n");
+      contentChanged = true;
+      viMode_ = ViMode::Insert;
+      break;
+    case 'O': {
+      const uint32_t ls = lineStartOf(cursorPos_);
+      cursorPos_ = ls;
+      insertText("\n");
+      cursorPos_ = ls;
+      contentChanged = true;
+      viMode_ = ViMode::Insert;
+      break;
+    }
+    case ':':
+      viMode_ = ViMode::Command;
+      viCommandLen_ = 0;
+      viCommand_[0] = '\0';
+      break;
+    default:
+      break;
+  }
+  return true;
+}
+
+void EditorActivity::handleViCommandKey(const HidKeyEvent& ev) {
+  frameDirty_ = true;
+  if (ev.usage == HID_ESCAPE) {
+    viMode_ = ViMode::Normal;
+    return;
+  }
+  if (ev.usage == HID_ENTER) {
+    viMode_ = ViMode::Normal;
+    runViCommand();
+    return;
+  }
+  if (ev.usage == HID_BACKSPACE) {
+    if (viCommandLen_ == 0) {
+      viMode_ = ViMode::Normal;
+    } else {
+      viCommand_[--viCommandLen_] = '\0';
+    }
+    return;
+  }
+  char ch;
+  if (!hidUsageToAscii(ev.usage, ev.mods, ch)) return;
+  if (viCommandLen_ < sizeof(viCommand_) - 1) {
+    viCommand_[viCommandLen_++] = ch;
+    viCommand_[viCommandLen_] = '\0';
+  }
+}
+
+void EditorActivity::runViCommand() {
+  const std::string_view cmd(viCommand_, viCommandLen_);
+  if (cmd == "w") {
+    doSave();
+  } else if (cmd == "q") {
+    requestExit();  // asks before discarding unsaved changes
+  } else if (cmd == "q!") {
+    finish();
+  } else if (cmd == "wq" || cmd == "x") {
+    doSave();
+    if (!document_.isDirty()) finish();
+  } else {
+    LOG_DBG("EDTR", "Unknown vi command: %s", viCommand_);
+    return;
+  }
+  // Leaving (or a confirm dialog) is deferred by the activity manager; keys
+  // still queued behind this Enter must not edit the document meanwhile.
+  if (cmd != "w") bleHid_.discardPending();
 }
 
 void EditorActivity::loop() {
@@ -1022,7 +1523,15 @@ void EditorActivity::drawStatusRow() {
   char left[96];
   const std::string name =
       filePath_.empty() ? std::string(tr(STR_UNTITLED)) : filePath_.substr(filePath_.find_last_of('/') + 1);
-  snprintf(left, sizeof(left), "%s%s", document_.isDirty() ? "*" : "", name.c_str());
+  if (viEnabled_ && viMode_ == ViMode::Command) {
+    snprintf(left, sizeof(left), ":%s_", viCommand_);
+  } else if (viEnabled_) {
+    snprintf(left, sizeof(left), "%s %s%s",
+             viMode_ == ViMode::Normal ? tr(STR_EDITOR_VI_NORMAL) : tr(STR_EDITOR_VI_INSERT),
+             document_.isDirty() ? "*" : "", name.c_str());
+  } else {
+    snprintf(left, sizeof(left), "%s%s", document_.isDirty() ? "*" : "", name.c_str());
+  }
 
   const char* modeStr = (inputMode_ == InputMode::Hiragana)   ? "\xe3\x81\x82"  // あ
                         : (inputMode_ == InputMode::Katakana) ? "\xe3\x82\xa2"  // ア
@@ -1101,7 +1610,19 @@ void EditorActivity::render(RenderLock&& lock) {
         memcpy(ch, rowBuf + off, std::min<uint32_t>(cpLen, 4));
         cw = renderer.getTextAdvanceX(EDITOR_FONT_ID, ch, EpdFontFamily::REGULAR);
       }
-      renderer.drawRect(cx, y, cw, charH_, 1, true);
+      if (viEnabled_ && viMode_ != ViMode::Insert) {
+        // vi Normal mode: solid block with the character knocked out in white.
+        renderer.fillRect(cx, y, cw, charH_, true);
+        if (off < got) {
+          uint32_t cpLen;
+          decodeUtf8At(rowBuf + off, got - off, cpLen);
+          char ch[5] = {};
+          memcpy(ch, rowBuf + off, std::min<uint32_t>(cpLen, 4));
+          renderer.drawText(EDITOR_FONT_ID, cx, y, ch, false);
+        }
+      } else {
+        renderer.drawRect(cx, y, cw, charH_, 1, true);
+      }
     }
   }
 

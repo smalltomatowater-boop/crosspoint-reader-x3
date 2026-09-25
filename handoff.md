@@ -11,8 +11,9 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
 
 ## Next session — start here
 
-1. **Next feature candidates** (owner picks): text selection and
-   copy/paste; Esc to leave the editor; passkey display for keyboards that
+1. **Next feature candidates** (owner picks): undo (`u`), vi visual mode
+   (owner would like blockwise/rectangle selection too), text selection and
+   copy/paste in the plain editor; passkey display for keyboards that
    require MITM (FreeInk SDK `BleKeyboardHost.cpp:309-370`, MIT:
    `setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY)` + `onPassKeyDisplay`, show the
    code in the status row). **INKDECK (github.com/Free-Ink/inkdeck) has no
@@ -74,6 +75,43 @@ only when the owner asks.
   The date is written only by an NTP sync (Wi-Fi connect or Settings →
   「今すぐ時計を同期」). This is by design, not a bug; the owner synced and
   got timestamp names.
+
+## Vi mode (done 2026-09-25, owner-tested on device)
+
+Settings → 操作 → エディタのVIモード (`SETTINGS.editorViMode`, JSON key
+`editorViMode`, default off). All code is in `EditorActivity` ("Vi mode"
+section). Written from scratch: busybox vi (GPL) / nvi expect a terminal
+and a contiguous buffer, and this editor sits on the SD piece table + IME.
+
+- Modes: Insert (the plain editor, IME included), Normal, Command (`:`).
+  With vi mode on, the editor opens in Normal. Normal-mode keys are ASCII
+  commands whatever the kana mode is.
+- Normal: `hjkl w b e 0 ^ $ gg G` Enter, Ctrl-F/B/D/U, counts (`5j`,
+  `3dd`), `x dd D yy p P`, `i a I A o O`, `:w :q :q! :wq :x`. The arrows,
+  Home/End, PgUp/PgDn and Delete fall through to the regular handler.
+- Esc in Insert: one press commits the composition as typed (pending `n`
+  → ん) and goes to Normal. While a candidate is shown, it first reverts to
+  the reading. The owner found the earlier "Esc cancels the composition
+  first" behaviour unresponsive. Two Esc in a row (the one that leaves
+  Insert counts) switch input to ASCII.
+- Yank register is a file, `/.crosspoint/edit/yank.txt` (always whole lines
+  ending in `\n`), copied with a 128-byte stack buffer, so there's no heap
+  use or size cap. It's reloaded in `onEnter()`, so it survives power-off.
+  Put goes through `EditorDocument::insertAt()`: RAM stays at the fixed
+  8KB edit head and consecutive chunks extend one piece
+  (`PieceTable.cpp:48`). The cost is SD writes equal to the pasted size.
+  **Idea for when undo is built** (from a review the owner pasted): make
+  the yank file a third read-only piece source, append-only with
+  (offset, length) per yank, so put is one piece insert and undo/redo of
+  pastes never copies text. This needs pieces to never point at rewritten
+  bytes, and something to compact the file.
+- The Normal-mode cursor is a solid block with the character in white. The
+  status row shows `-- NORMAL --` / `-- INSERT --` (English-only strings,
+  falling back from english.yaml), or the `:` command line.
+
+Also 2026-09-25: **Caps Lock (HID 0x39) cycles あ→ア→AA** instead of Tab
+(the owner found Tab switching odd). It's ignored in vi Normal mode (the
+owner liked that). Tab now inserts four spaces (the font has no tab glyph).
 
 CI facts learned the hard way (2026-09-25): `pio check` in CI runs with
 `--fail-on-defect low` — even a low-severity style nit fails the build, so
