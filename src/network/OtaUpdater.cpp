@@ -17,7 +17,11 @@
 #include <string>
 
 namespace {
-constexpr char latestReleaseUrl[] = "https://api.github.com/repos/crosspoint-reader/crosspoint-reader/releases/latest";
+// This fork's releases, not upstream's: an upstream build would replace the
+// Japanese UI, editor and X3 changes. Tags must be plain "X.Y.Z" (the version
+// check below parses three numbers) and carry a firmware.bin asset.
+constexpr char latestReleaseUrl[] =
+    "https://api.github.com/repos/smalltomatowater-boop/crosspoint-reader-x3/releases/latest";
 
 esp_err_t http_client_set_header_cb(esp_http_client_handle_t http_client) {
   return esp_http_client_set_header(http_client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);

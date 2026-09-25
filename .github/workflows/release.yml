@@ -7,6 +7,8 @@ on:
 jobs:
   build-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the GitHub Release below
     steps:
       - uses: actions/checkout@v6
         with:
@@ -45,3 +47,18 @@ jobs:
             .pio/build/gh_release/firmware.elf
             .pio/build/gh_release/firmware.map
             .pio/build/gh_release/partitions.bin
+
+      # Publish a GitHub Release with the firmware attached. The on-device OTA
+      # updater (src/network/OtaUpdater.cpp) reads this repo's latest release
+      # and needs an asset named exactly firmware.bin; for manual installs,
+      # copy firmware.bin to the SD card and use Settings > SD firmware update.
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            .pio/build/gh_release/firmware.bin \
+            .pio/build/gh_release/bootloader.bin \
+            .pio/build/gh_release/partitions.bin \
+            --title "CrossPoint Reader X3 ${{ github.ref_name }}" \
+            --generate-notes

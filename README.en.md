@@ -8,6 +8,16 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 
 ---
 
+## Installing
+
+1. Download `firmware.bin` from [Releases](https://github.com/smalltomatowater-boop/crosspoint-reader-x3/releases/latest)
+2. Copy it to the SD card
+3. On the X3: Settings → "SD Card Firmware Update" → pick `firmware.bin`
+
+From 1.4.0 on, "Check for updates" (OTA) in Settings fetches this fork's new releases. **On 1.3.0 or earlier, OTA installs the upstream firmware, which removes the Japanese UI and the editor.** Update from 1.3.0 or earlier with the SD card.
+
+---
+
 ## What this fork adds
 
 ### Japanese UI (Migu1M font)

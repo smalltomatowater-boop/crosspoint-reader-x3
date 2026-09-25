@@ -8,6 +8,16 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 
 ---
 
+## インストール
+
+1. [Releases](https://github.com/smalltomatowater-boop/crosspoint-reader-x3/releases/latest) から `firmware.bin` をダウンロード
+2. SDカードにコピー
+3. X3で 設定 →「SDカードファームウェア更新」→ `firmware.bin` を選ぶ
+
+1.4.0 以降は、設定の「アップデートを確認」(OTA)でこのフォークの新しい版が届きます。**1.3.0 以前でOTAを使うと、本家のファームウェアで上書きされ、日本語UIやエディタが消えます**。1.3.0 以前からはSDカードで更新してください。
+
+---
+
 ## このフォークで追加したもの
 
 ### 日本語UI (Migu1M フォント)
