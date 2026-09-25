@@ -30,6 +30,21 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
    `d$`, `cw`, `y3j`). Rewrite the motions as range-returning functions,
    then add `d`/`c`/`y` and characterwise yank together. README.en.md
    mirrors README.md; keep both in sync.
+   **Vi visual mode done (2026-09-25, owner-verified)**: `v` / `V` / `Ctrl-V`
+   (block), with `d x y c o`, block `I/i A/a` (the first line's typed text is
+   copied to the others on Esc, in `finishBlockInsert()`), and block `p`.
+   The register file is now `/.crosspoint/edit/yank.bin`: 1 type byte
+   (L/C/B) + text. Block columns are display cells from the logical line
+   start (`vcolOf`, `posAtVcol`, `blockRangeInLine`). In block mode `j/k`
+   (and the arrows, which map to hjkl / 0 / $ in Normal and Visual) move by
+   logical line with a kept column: display-row motion on wrapped lines
+   stretched the block. The selection is computed once per key in
+   `afterKey()` → `computeSelection()` (per-row byte ranges), not in
+   `relayout()`, which motions call once per row and made V mode sluggish.
+   Each e-ink frame is ~0.56s (PON 127 + DRF 381 + POF 52 ms) whatever the
+   content; drawing itself is ~17ms.
+   Next idea from the owner: **typewriter scrolling** (keep the cursor row
+   at a fixed height). No RAM needed; more full-screen shifts on e-ink.
    **Next feature candidates** (owner picks): vi visual mode
    (owner would like blockwise/rectangle selection too), text selection and
    copy/paste in the plain editor; passkey display for keyboards that

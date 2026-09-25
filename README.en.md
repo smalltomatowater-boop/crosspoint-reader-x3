@@ -60,7 +60,9 @@ Device buttons: "Menu" opens Save / Save As / Open / New / Exit. "« Home" leave
 Turn on Settings → "Controls" → "Editor Vi Mode" for vi-style modal editing. With it off, the editor works as described above. With it on, the editor starts in Normal mode.
 
 - Motion: `h` `j` `k` `l`, `w` `b` `e`, `0` `^` `$`, `gg` `G`, Enter, Ctrl-F/B (one screen), Ctrl-D/U (half a screen). Counts work too, e.g. `5j`. In Japanese text, `w` / `b` stop where the script changes (hiragana, katakana, kanji).
-- Editing: `x`, `dd`, `D`, `yy`, `p` `P`. Yanked lines are kept on the SD card (`/.crosspoint/edit/yank.txt`), so they use no RAM and survive power-off.
+- Editing: `x`, `dd`, `D`, `yy`, `p` `P`. Yanked text is kept on the SD card (`/.crosspoint/edit/yank.bin`), so it uses no RAM and survives power-off.
+- Visual mode: `v` (characters), `V` (lines), `Ctrl-V` (block). Extend the selection with motions, then `d`/`x` delete, `y` yank, `c` change, `o` jump to the other end; Esc leaves. The arrow keys work too.
+- Block: columns are display cells (full-width characters are 2), and `j`/`k` move by logical line. `I`/`i` and `A`/`a` insert what you type on the first line into every line when you press Esc (Japanese works too). `p` pastes a yanked block as a column.
 - Into Insert mode: `i` `a` `I` `A` `o` `O`. Romaji-kana input and kanji conversion work as usual in Insert mode.
 - Esc: commits the kana being typed and goes to Normal mode (while a candidate is shown, it goes back to the reading first). Two Esc presses in a row switch to direct/ASCII input.
 - Commands:
@@ -71,7 +73,7 @@ Turn on Settings → "Controls" → "Editor Vi Mode" for vi-style modal editing.
   - The command line takes ASCII only.
 - Caps Lock does nothing in Normal mode.
 - Undo: `u`; redo: `Ctrl-R`. Multi-level; one Normal-mode command, or one line typed in Insert mode, is one step. Deleted text is kept on the SD card (`/.crosspoint/edit/undo.bin`), and saving keeps the history.
-- Not supported: visual mode, and operator + motion combinations such as `dw` or `cw`.
+- Not supported: operator + motion combinations such as `dw` or `cw`.
 
 ## Setting up the kanji dictionary
 

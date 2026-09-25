@@ -59,6 +59,7 @@ constexpr uint8_t HID_U = 0x18;
 constexpr uint8_t HID_Z_KEY = 0x1D;
 constexpr uint8_t HID_R = 0x15;
 constexpr uint8_t HID_Y = 0x1C;
+constexpr uint8_t HID_V = 0x19;
 constexpr uint8_t HID_Z = 0x1D;
 
 constexpr uint8_t MOD_LCTRL = 0x01;
@@ -171,7 +172,12 @@ void EditorActivity::onEnter() {
   if (viEnabled_ && Storage.exists(VI_YANK_PATH)) {
     // The register survives power-off: pick up the last yank from the SD card.
     HalFile yank;
-    if (Storage.openFileForRead("EDTR", VI_YANK_PATH, yank)) viYankLen_ = static_cast<uint32_t>(yank.fileSize());
+    char type = 0;
+    if (Storage.openFileForRead("EDTR", VI_YANK_PATH, yank) && yank.fileSize() > 1 && yank.read(&type, 1) == 1 &&
+        (type == YANK_LINES || type == YANK_CHARS || type == YANK_BLOCK)) {
+      viYankType_ = type;
+      viYankLen_ = static_cast<uint32_t>(yank.fileSize()) - 1;
+    }
   }
 
   if (!document_.open(filePath_)) {
@@ -552,6 +558,17 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
     } else if (ev.usage == HID_Y || (ev.usage == HID_R && viEnabled_ && viMode_ == ViMode::Normal)) {
       redoLastChange();
       afterKey(true, true, false);
+    } else if (ev.usage == HID_V && viEnabled_ && viMode_ == ViMode::Normal) {
+      // Ctrl-V: block (rectangle) selection; again leaves it.
+      if (viVisual_ == ViVisual::Block) {
+        viVisual_ = ViVisual::None;
+      } else {
+        if (viVisual_ == ViVisual::None) viAnchor_ = cursorPos_;
+        viVisual_ = ViVisual::Block;
+      }
+      viPending_ = 0;
+      viCount_ = 0;
+      afterKey(false, true, false);
     } else if (viEnabled_ && viMode_ == ViMode::Normal) {
       // vi scrolling: Ctrl-F/B a screen, Ctrl-D/U half a screen.
       int rows = 0;
@@ -750,6 +767,8 @@ void EditorActivity::afterKey(bool contentChanged, bool cursorMoved, bool isVert
     relayout();
     ensureCursorVisible();
     if (!isVertical) goalCol_ = cursorCol_;
+    // Once per key, not in relayout(): motions call relayout() once per row moved.
+    computeSelection();
     frameDirty_ = true;
   }
 }
@@ -841,6 +860,31 @@ void EditorActivity::viWordEnd() {
   }
 }
 
+bool EditorActivity::yankOpen(HalFile& file, char type) {
+  viYankLen_ = 0;
+  if (!Storage.openFileForWrite("EDTR", VI_YANK_PATH, file) || file.write(&type, 1) != 1) {
+    LOG_ERR("EDTR", "Yank: cannot write %s", VI_YANK_PATH);
+    return false;
+  }
+  viYankType_ = type;
+  return true;
+}
+
+bool EditorActivity::yankAppend(HalFile& file, uint32_t start, uint32_t end, uint32_t& written, char& last) {
+  char buf[128];
+  for (uint32_t pos = start; pos < end;) {
+    const uint32_t got = document_.readAt(pos, buf, std::min<uint32_t>(sizeof(buf), end - pos));
+    if (got == 0 || file.write(buf, got) != got) {
+      LOG_ERR("EDTR", "Yank: write failed at %u", pos);
+      return false;
+    }
+    last = buf[got - 1];
+    written += got;
+    pos += got;
+  }
+  return true;
+}
+
 void EditorActivity::viYankLines(uint32_t count) {
   const uint32_t len = document_.length();
   const uint32_t start = lineStartOf(cursorPos_);
@@ -849,41 +893,47 @@ void EditorActivity::viYankLines(uint32_t count) {
     end = lineEndOf(end);
     if (end < len) ++end;  // take the '\n'
   }
-
-  viYankLen_ = 0;
   HalFile file;
-  if (!Storage.openFileForWrite("EDTR", VI_YANK_PATH, file)) {
-    LOG_ERR("EDTR", "Yank: cannot open %s", VI_YANK_PATH);
-    return;
-  }
-  char buf[128];
+  if (!yankOpen(file, YANK_LINES)) return;
   uint32_t written = 0;
   char last = 0;
-  for (uint32_t pos = start; pos < end;) {
-    const uint32_t got = document_.readAt(pos, buf, std::min<uint32_t>(sizeof(buf), end - pos));
-    if (got == 0 || file.write(buf, got) != got) {
-      LOG_ERR("EDTR", "Yank: write failed at %u", pos);
-      return;
-    }
-    last = buf[got - 1];
-    written += got;
-    pos += got;
-  }
-  // The register always holds whole lines ending in '\n', so put never has
-  // to guess where a line break goes.
+  if (!yankAppend(file, start, end, written, last)) return;
+  // Linewise text always ends in '\n', so put never has to guess where a
+  // line break goes.
   if (written == 0 || last != '\n') {
-    if (file.write("\n", 1) != 1) {
-      LOG_ERR("EDTR", "Yank: write failed");
-      return;
-    }
+    if (file.write("\n", 1) != 1) return;
     ++written;
+  }
+  viYankLen_ = written;
+}
+
+void EditorActivity::viYankRange(uint32_t start, uint32_t end) {
+  HalFile file;
+  if (!yankOpen(file, YANK_CHARS)) return;
+  uint32_t written = 0;
+  char last = 0;
+  if (yankAppend(file, start, end, written, last)) viYankLen_ = written;
+}
+
+void EditorActivity::viYankBlock(const BlockRect& r) {
+  HalFile file;
+  if (!yankOpen(file, YANK_BLOCK)) return;
+  uint32_t written = 0;
+  char last = 0;
+  uint32_t ls = r.firstLine;
+  for (uint32_t i = 0; i < r.lines && ls != UINT32_MAX; ++i) {
+    uint32_t a, b;
+    blockRangeInLine(ls, r.c1, r.c2, a, b);
+    if (!yankAppend(file, a, b, written, last) || file.write("\n", 1) != 1) return;
+    ++written;
+    ls = nextLineStart(ls);
   }
   viYankLen_ = written;
 }
 
 uint32_t EditorActivity::insertYankAt(uint32_t at, uint32_t count) {
   HalFile file;
-  if (!Storage.openFileForRead("EDTR", VI_YANK_PATH, file)) {
+  if (!Storage.openFileForRead("EDTR", VI_YANK_PATH, file) || !file.seekSet(1)) {
     LOG_ERR("EDTR", "Put: cannot open %s", VI_YANK_PATH);
     return 0;
   }
@@ -920,6 +970,18 @@ void EditorActivity::viDeleteLines(uint32_t count) {
 
 void EditorActivity::viPut(bool below) {
   if (viYankLen_ == 0) return;
+  if (viYankType_ == YANK_BLOCK) {
+    viPutBlock(below);
+    return;
+  }
+  if (viYankType_ == YANK_CHARS) {
+    uint32_t at = cursorPos_;
+    if (below && at < document_.length() && byteAt(at) != '\n') at += nextCodepointLen(at);
+    const uint32_t n = insertYankAt(at, viYankLen_);
+    cursorPos_ = at + n;
+    if (n > 0) cursorPos_ -= prevCodepointLen(cursorPos_);  // on the last pasted character, as in vi
+    return;
+  }
   uint32_t at = lineStartOf(cursorPos_);
   if (below) {
     at = lineEndOf(cursorPos_);
@@ -938,6 +1000,300 @@ void EditorActivity::viPut(bool below) {
   cursorPos_ = at;
 }
 
+void EditorActivity::viPutBlock(bool after) {
+  // Each register row goes into the next line at the same cell column,
+  // padding short lines and adding lines past the end as needed.
+  uint32_t vcol = vcolOf(cursorPos_);
+  if (after && cursorPos_ < document_.length() && byteAt(cursorPos_) != '\n') vcol += cellWidthAt(cursorPos_);
+  uint32_t lineStart = lineStartOf(cursorPos_);
+  uint32_t at = posAtVcol(lineStart, vcol, /*pad=*/true);
+  const uint32_t first = at;
+
+  HalFile file;
+  if (!Storage.openFileForRead("EDTR", VI_YANK_PATH, file) || !file.seekSet(1)) {
+    LOG_ERR("EDTR", "Put: cannot open %s", VI_YANK_PATH);
+    return;
+  }
+  char buf[128];
+  bool pendingNewline = false;  // a row ended; move down before inserting more
+  auto nextRow = [&]() {
+    uint32_t next = nextLineStart(lineStart);
+    if (next == UINT32_MAX) {
+      editInsert(document_.length(), "\n");
+      next = document_.length();
+    }
+    lineStart = next;
+    at = posAtVcol(lineStart, vcol, /*pad=*/true);
+  };
+  for (uint32_t done = 0; done < viYankLen_;) {
+    const int got = file.read(buf, std::min<uint32_t>(sizeof(buf), viYankLen_ - done));
+    if (got <= 0) break;
+    done += static_cast<uint32_t>(got);
+    int segStart = 0;
+    for (int i = 0; i <= got; ++i) {
+      if (i < got && buf[i] != '\n') continue;
+      if (i > segStart) {
+        if (pendingNewline) {
+          nextRow();
+          pendingNewline = false;
+        }
+        const auto n = static_cast<uint32_t>(i - segStart);
+        if (!editInsert(at, std::string_view(buf + segStart, n))) return;
+        at += n;
+      }
+      if (i < got) {
+        if (pendingNewline) nextRow();  // an empty row still takes a line
+        pendingNewline = true;
+      }
+      segStart = i + 1;
+    }
+  }
+  cursorPos_ = first;
+}
+
+// ---- Visual mode -----------------------------------------------------------
+
+int EditorActivity::cellWidthAt(uint32_t pos) {
+  char buf[4];
+  const uint32_t got = document_.readAt(pos, buf, sizeof(buf));
+  if (got == 0) return 1;
+  uint32_t cpLen;
+  const uint32_t cp = decodeUtf8At(buf, got, cpLen);
+  return utf8IsCjkBreakable(cp) ? 2 : 1;
+}
+
+uint32_t EditorActivity::vcolOf(uint32_t pos) {
+  uint32_t p = lineStartOf(pos);
+  uint32_t col = 0;
+  while (p < pos) {
+    col += cellWidthAt(p);
+    p += nextCodepointLen(p);
+  }
+  return col;
+}
+
+uint32_t EditorActivity::nextLineStart(uint32_t lineStart) {
+  const uint32_t e = lineEndOf(lineStart);
+  return e < document_.length() ? e + 1 : UINT32_MAX;
+}
+
+uint32_t EditorActivity::posAtVcol(uint32_t lineStart, uint32_t vcol, bool pad) {
+  const uint32_t len = document_.length();
+  uint32_t pos = lineStart;
+  uint32_t col = 0;
+  while (pos < len && byteAt(pos) != '\n') {
+    if (col >= vcol) return pos;
+    const int w = cellWidthAt(pos);
+    pos += nextCodepointLen(pos);
+    col += w;
+    if (col > vcol) return pos;  // a wide char straddles vcol: go after it
+  }
+  if (col >= vcol) return pos;
+  if (!pad) return UINT32_MAX;
+  char spaces[32];
+  memset(spaces, ' ', sizeof(spaces));
+  for (uint32_t need = vcol - col; need > 0;) {
+    const uint32_t n = std::min<uint32_t>(need, sizeof(spaces));
+    if (!editInsert(pos, std::string_view(spaces, n))) break;
+    pos += n;
+    need -= n;
+  }
+  return pos;
+}
+
+void EditorActivity::blockRangeInLine(uint32_t lineStart, uint32_t c1, uint32_t c2, uint32_t& a, uint32_t& b) {
+  const uint32_t len = document_.length();
+  uint32_t pos = lineStart;
+  uint32_t col = 0;
+  bool found = false;
+  a = b = UINT32_MAX;
+  while (pos < len && byteAt(pos) != '\n' && col <= c2) {
+    const int w = cellWidthAt(pos);
+    const uint32_t next = pos + nextCodepointLen(pos);
+    if (col + w - 1 >= c1) {  // overlaps [c1, c2]; a half-covered wide char counts whole
+      if (!found) a = pos;
+      found = true;
+      b = next;
+    }
+    col += w;
+    pos = next;
+  }
+  if (!found) a = b = pos;  // line too short: empty range at its end
+}
+
+EditorActivity::BlockRect EditorActivity::blockRect() {
+  const uint32_t lo = std::min(viAnchor_, cursorPos_);
+  const uint32_t hi = std::max(viAnchor_, cursorPos_);
+  const uint32_t va = vcolOf(viAnchor_);
+  const uint32_t vc = vcolOf(cursorPos_);
+  BlockRect r{};
+  r.firstLine = lineStartOf(lo);
+  r.c1 = std::min(va, vc);
+  r.c2 = std::max(va + cellWidthAt(viAnchor_) - 1, vc + cellWidthAt(cursorPos_) - 1);
+  const uint32_t lastLine = lineStartOf(hi);
+  r.lines = 1;
+  for (uint32_t ls = r.firstLine; ls < lastLine && ls != UINT32_MAX; ls = nextLineStart(ls)) ++r.lines;
+  return r;
+}
+
+void EditorActivity::computeSelection() {
+  for (uint8_t r = 0; r < MAX_GRID_ROWS; ++r) {
+    selStart_[r] = selEnd_[r] = 0;
+    selNewline_[r] = false;
+  }
+  if (viVisual_ == ViVisual::None || rowCount_ == 0) return;
+
+  const uint32_t len = document_.length();
+  const uint32_t lo = std::min(viAnchor_, cursorPos_);
+  const uint32_t hi = std::max(viAnchor_, cursorPos_);
+  uint32_t a = 0, b = 0;  // document range for Char/Line
+  BlockRect rect{};
+  uint32_t lastLine = 0;
+  if (viVisual_ == ViVisual::Char) {
+    a = lo;
+    b = hi < len ? hi + nextCodepointLen(hi) : len;
+  } else if (viVisual_ == ViVisual::Line) {
+    a = lineStartOf(lo);
+    b = lineEndOf(hi);
+    if (b < len) ++b;
+  } else {
+    rect = blockRect();
+    lastLine = lineStartOf(hi);
+  }
+
+  uint32_t lineStart = lineStartOf(rowStart_[0]);
+  uint32_t cachedLine = UINT32_MAX, ba = 0, bb = 0;
+  for (uint8_t r = 0; r < rowCount_ && r < maxRows_; ++r) {
+    if (r > 0 && rowEndsWithNewline_[r - 1]) lineStart = rowStart_[r];
+    const uint32_t rs = rowStart_[r];
+    uint32_t re = rowStart_[r + 1];
+    const bool hasNl = rowEndsWithNewline_[r] && re > rs;
+    if (hasNl) --re;  // text part of the row, without its '\n'
+    uint32_t sa, sb;
+    if (viVisual_ == ViVisual::Block) {
+      if (lineStart < rect.firstLine || lineStart > lastLine) continue;
+      if (cachedLine != lineStart) {
+        blockRangeInLine(lineStart, rect.c1, rect.c2, ba, bb);
+        cachedLine = lineStart;
+      }
+      sa = ba;
+      sb = bb;
+    } else {
+      sa = a;
+      sb = b;
+      selNewline_[r] = hasNl && sa <= re && sb > re;
+    }
+    selStart_[r] = std::max(sa, rs);
+    selEnd_[r] = std::min(sb, re);
+  }
+}
+
+void EditorActivity::viClampToLine() {
+  const uint32_t ls = lineStartOf(cursorPos_);
+  if ((cursorPos_ >= document_.length() || byteAt(cursorPos_) == '\n') && cursorPos_ > ls) {
+    cursorPos_ -= prevCodepointLen(cursorPos_);
+  }
+}
+
+bool EditorActivity::viVisualOperator(char op) {
+  const ViVisual mode = viVisual_;
+  viVisual_ = ViVisual::None;
+  const uint32_t len = document_.length();
+  const uint32_t lo = std::min(viAnchor_, cursorPos_);
+  const uint32_t hi = std::max(viAnchor_, cursorPos_);
+  const bool remove = op == 'd' || op == 'x' || op == 'c';
+
+  if (mode == ViVisual::Char) {
+    if (op == 'I' || op == 'A') return false;
+    const uint32_t end = hi < len ? hi + nextCodepointLen(hi) : len;
+    viYankRange(lo, end);
+    cursorPos_ = lo;
+    if (remove) editDelete(lo, end - lo);
+    if (op == 'c') {
+      viMode_ = ViMode::Insert;
+    } else {
+      viClampToLine();
+    }
+    return remove;
+  }
+
+  if (mode == ViVisual::Line) {
+    if (op == 'I' || op == 'A') return false;
+    const uint32_t first = lineStartOf(lo);
+    uint32_t lines = 1;
+    for (uint32_t ls = first; lineEndOf(ls) < hi; ls = lineEndOf(ls) + 1) ++lines;
+    cursorPos_ = first;
+    if (op == 'c') {
+      // Replace the lines with one empty line and type into it.
+      viYankLines(lines);
+      uint32_t end = first;
+      for (uint32_t i = 0; i < lines; ++i) end = (i + 1 < lines) ? lineEndOf(end) + 1 : lineEndOf(end);
+      editDelete(first, end - first);
+      cursorPos_ = first;
+      viMode_ = ViMode::Insert;
+      return true;
+    }
+    if (remove) {
+      viDeleteLines(lines);
+    } else {
+      viYankLines(lines);
+    }
+    return remove;
+  }
+
+  // Block
+  const BlockRect rect = blockRect();
+  if (op == 'y' || remove) viYankBlock(rect);
+  if (remove) {
+    uint32_t ls = rect.firstLine;
+    for (uint32_t i = 0; i < rect.lines && ls != UINT32_MAX; ++i) {
+      uint32_t a, b;
+      blockRangeInLine(ls, rect.c1, rect.c2, a, b);
+      editDelete(a, b - a);
+      ls = nextLineStart(ls);
+    }
+  }
+  if (op == 'c' || op == 'I' || op == 'A') {
+    viBlockInsert_ = {};
+    viBlockInsert_.active = true;
+    viBlockInsert_.append = (op == 'A');
+    viBlockInsert_.vcol = (op == 'A') ? rect.c2 + 1 : rect.c1;
+    viBlockInsert_.firstLine = rect.firstLine;
+    viBlockInsert_.extraLines = rect.lines - 1;
+    const uint32_t at = posAtVcol(rect.firstLine, viBlockInsert_.vcol, /*pad=*/true);
+    cursorPos_ = at;
+    viBlockInsert_.startPos = at;
+    viMode_ = ViMode::Insert;
+    return true;
+  }
+  const uint32_t top = posAtVcol(rect.firstLine, rect.c1, /*pad=*/false);
+  cursorPos_ = top == UINT32_MAX ? rect.firstLine : top;
+  viClampToLine();
+  return remove;
+}
+
+void EditorActivity::finishBlockInsert() {
+  const BlockInsert bi = viBlockInsert_;
+  viBlockInsert_.active = false;
+  if (!bi.active || cursorPos_ <= bi.startPos || lineStartOf(cursorPos_) != lineStartOf(bi.startPos)) return;
+  const uint32_t textLen = cursorPos_ - bi.startPos;
+  // Copy the typed text into each line below. Those lines come after the
+  // source, so inserting there never moves it.
+  uint32_t ls = nextLineStart(lineStartOf(bi.startPos));
+  char buf[128];
+  for (uint32_t i = 0; i < bi.extraLines && ls != UINT32_MAX; ++i) {
+    const uint32_t at = posAtVcol(ls, bi.vcol, bi.append);
+    if (at != UINT32_MAX) {
+      for (uint32_t done = 0; done < textLen;) {
+        const uint32_t got = document_.readAt(bi.startPos + done, buf, std::min<uint32_t>(sizeof(buf), textLen - done));
+        if (got == 0 || !editInsert(at + done, std::string_view(buf, got))) break;
+        done += got;
+      }
+    }
+    ls = nextLineStart(ls);
+  }
+}
+
 void EditorActivity::enterViNormal() {
   commitComposition();
   romajiKana_.clear();
@@ -945,7 +1301,8 @@ void EditorActivity::enterViNormal() {
   viPending_ = 0;
   viCount_ = 0;
   viEscCount_ = 1;  // the Esc that got us here
-  closeChange();    // the Insert session was one change
+  if (viBlockInsert_.active) finishBlockInsert();
+  closeChange();  // the Insert session was one change
   // As in vi, leaving Insert steps back onto the last typed character.
   if (cursorPos_ > lineStartOf(cursorPos_)) cursorPos_ -= prevCodepointLen(cursorPos_);
 }
@@ -953,12 +1310,6 @@ void EditorActivity::enterViNormal() {
 bool EditorActivity::handleViNormalKey(const HidKeyEvent& ev, bool& contentChanged, bool& cursorMoved,
                                        bool& isVertical) {
   switch (ev.usage) {
-    case HID_UP:
-    case HID_DOWN:
-    case HID_LEFT:
-    case HID_RIGHT:
-    case HID_HOME:
-    case HID_END:
     case HID_PAGE_UP:
     case HID_PAGE_DOWN:
     case HID_DELETE:
@@ -969,6 +1320,12 @@ bool EditorActivity::handleViNormalKey(const HidKeyEvent& ev, bool& contentChang
     case HID_ESCAPE:
       viPending_ = 0;
       viCount_ = 0;
+      if (viVisual_ != ViVisual::None) {
+        viVisual_ = ViVisual::None;
+        viEscCount_ = 0;
+        cursorMoved = true;
+        return true;
+      }
       if (++viEscCount_ >= 2) {
         viEscCount_ = 0;
         inputMode_ = InputMode::Ascii;
@@ -981,31 +1338,81 @@ bool EditorActivity::handleViNormalKey(const HidKeyEvent& ev, bool& contentChang
   }
   viEscCount_ = 0;
 
+  // Arrows and Home/End act as their vi motions, so they also follow the
+  // block-mode rules (logical lines, kept column) and extend selections.
   char ch = 0;
-  if (ev.usage == HID_ENTER) {
-    ch = '+';
-  } else if (ev.usage == HID_SPACE) {
-    ch = 'l';
-  } else if (ev.usage == HID_BACKSPACE) {
+  if (ev.usage == HID_DOWN) {
+    ch = 'j';
+  } else if (ev.usage == HID_UP) {
+    ch = 'k';
+  } else if (ev.usage == HID_LEFT) {
     ch = 'h';
-  } else if (!hidUsageToAscii(ev.usage, ev.mods, ch)) {
-    return true;  // Caps Lock, Tab etc.: nothing in Normal mode
+  } else if (ev.usage == HID_RIGHT) {
+    ch = 'l';
+  } else if (ev.usage == HID_HOME) {
+    ch = '0';
+  } else if (ev.usage == HID_END) {
+    ch = '$';
+  }
+  const bool fromNavKey = ch != 0;  // never part of a count ("3" then Home is not "30")
+  if (!fromNavKey) {
+    if (ev.usage == HID_ENTER) {
+      ch = '+';
+    } else if (ev.usage == HID_SPACE) {
+      ch = 'l';
+    } else if (ev.usage == HID_BACKSPACE) {
+      ch = 'h';
+    } else if (!hidUsageToAscii(ev.usage, ev.mods, ch)) {
+      return true;  // Caps Lock, Tab etc.: nothing in Normal mode
+    }
   }
 
-  if ((ch >= '1' && ch <= '9') || (ch == '0' && viCount_ > 0)) {
+  if (!fromNavKey && ((ch >= '1' && ch <= '9') || (ch == '0' && viCount_ > 0))) {
     viCount_ = static_cast<uint16_t>(std::min(999, viCount_ * 10 + (ch - '0')));
     return true;
   }
   const char pending = viPending_;
   viPending_ = 0;
-  if (!pending && (ch == 'd' || ch == 'y' || ch == 'g')) {
+  const bool visual = viVisual_ != ViVisual::None;
+  if (!pending && (ch == 'g' || (!visual && (ch == 'd' || ch == 'y')))) {
     viPending_ = ch;  // keeps viCount_ for "3dd"
     return true;
   }
   const uint32_t count = viCount_ ? viCount_ : 1;
   viCount_ = 0;
+  if (ch != 'j' && ch != 'k') viGoalValid_ = false;
   cursorMoved = true;  // mode/cursor changes all repaint
   closeChange();       // each Normal command (or Insert session it starts) is one change
+  if (viVisual_ == ViVisual::Block && (ch == 'i' || ch == 'a')) ch = static_cast<char>(ch - 'a' + 'A');
+  if (visual && pending != 'g') {
+    switch (ch) {
+      case 'd':
+      case 'x':
+      case 'y':
+      case 'c':
+      case 'I':
+      case 'A':
+        contentChanged = viVisualOperator(ch);
+        return true;
+      case 'o':
+        std::swap(viAnchor_, cursorPos_);
+        return true;
+      case 'v':
+        viVisual_ = viVisual_ == ViVisual::Char ? ViVisual::None : ViVisual::Char;
+        return true;
+      case 'V':
+        viVisual_ = viVisual_ == ViVisual::Line ? ViVisual::None : ViVisual::Line;
+        return true;
+      default:
+        if (!strchr("hjkl+0^$wbeG", ch)) return true;  // only motions extend the selection
+        break;
+    }
+  }
+  if (!visual && (ch == 'v' || ch == 'V')) {
+    viVisual_ = ch == 'v' ? ViVisual::Char : ViVisual::Line;
+    viAnchor_ = cursorPos_;
+    return true;
+  }
   if (ch == 'u') {
     undoLastChange();
     contentChanged = true;
@@ -1056,11 +1463,24 @@ bool EditorActivity::handleViNormalKey(const HidKeyEvent& ev, bool& contentChang
       }
       break;
     case 'j':
-      moveCursorVertically(static_cast<int>(count));
-      isVertical = true;
-      break;
     case 'k':
-      moveCursorVertically(-static_cast<int>(count));
+      if (viVisual_ == ViVisual::Block) {
+        // By logical line, keeping the cell column: display rows would put
+        // a wrapped line's continuation at column 57+ and stretch the block.
+        if (!viGoalValid_) viGoalVcol_ = vcolOf(cursorPos_);
+        uint32_t ls = lineStartOf(cursorPos_);
+        for (uint32_t i = 0; i < count; ++i) {
+          const uint32_t next = (ch == 'j') ? nextLineStart(ls) : (ls > 0 ? lineStartOf(ls - 1) : UINT32_MAX);
+          if (next == UINT32_MAX) break;
+          ls = next;
+        }
+        const uint32_t at = posAtVcol(ls, viGoalVcol_, /*pad=*/false);
+        cursorPos_ = at == UINT32_MAX ? lineEndOf(ls) : at;
+        viClampToLine();
+        viGoalValid_ = true;
+      } else {
+        moveCursorVertically(ch == 'j' ? static_cast<int>(count) : -static_cast<int>(count));
+      }
       isVertical = true;
       break;
     case '+':  // Enter: first non-blank of the next line
@@ -1799,9 +2219,14 @@ void EditorActivity::drawStatusRow() {
   if (viEnabled_ && viMode_ == ViMode::Command) {
     snprintf(left, sizeof(left), ":%s_", viCommand_);
   } else if (viEnabled_) {
-    snprintf(left, sizeof(left), "%s %s%s",
-             viMode_ == ViMode::Normal ? tr(STR_EDITOR_VI_NORMAL) : tr(STR_EDITOR_VI_INSERT),
-             document_.isDirty() ? "*" : "", name.c_str());
+    const char* modeName = tr(STR_EDITOR_VI_INSERT);
+    if (viMode_ == ViMode::Normal) {
+      modeName = viVisual_ == ViVisual::Char    ? tr(STR_EDITOR_VI_VISUAL)
+                 : viVisual_ == ViVisual::Line  ? tr(STR_EDITOR_VI_VISUAL_LINE)
+                 : viVisual_ == ViVisual::Block ? tr(STR_EDITOR_VI_VISUAL_BLOCK)
+                                                : tr(STR_EDITOR_VI_NORMAL);
+    }
+    snprintf(left, sizeof(left), "%s %s%s", modeName, document_.isDirty() ? "*" : "", name.c_str());
   } else {
     snprintf(left, sizeof(left), "%s%s", document_.isDirty() ? "*" : "", name.c_str());
   }
@@ -1870,6 +2295,22 @@ void EditorActivity::render(RenderLock&& lock) {
         renderer.drawLine(prefixX(a - start), uy, prefixX(b - start), uy, compose_ == ComposeState::Converting ? 3 : 1,
                           true);
       }
+    }
+
+    if (viVisual_ != ViVisual::None && selEnd_[r] > selStart_[r] && selStart_[r] >= start) {
+      // Selection: black band with the text redrawn in white.
+      const uint32_t sa = std::min<uint32_t>(selStart_[r] - start, got);
+      const uint32_t sb = std::min<uint32_t>(selEnd_[r] - start, got);
+      const int x1 = prefixX(sa);
+      const int x2 = prefixX(sb);
+      renderer.fillRect(x1, y, x2 - x1, charH_, true);
+      const char saved = rowBuf[sb];
+      rowBuf[sb] = '\0';
+      renderer.drawText(EDITOR_FONT_ID, x1, y, rowBuf + sa, false);
+      rowBuf[sb] = saved;
+    }
+    if (viVisual_ != ViVisual::None && selNewline_[r]) {
+      renderer.fillRect(prefixX(got), y, charW_ / 2, charH_, true);  // selected line break
     }
 
     if (showCursor && r == cursorRow_) {

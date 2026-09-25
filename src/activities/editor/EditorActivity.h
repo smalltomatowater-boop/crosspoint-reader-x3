@@ -228,11 +228,65 @@ class EditorActivity final : public Activity {
   uint8_t viEscCount_ = 0;
   char viCommand_[64] = {};
   uint8_t viCommandLen_ = 0;
-  // Linewise register for dd/yy/p/P, kept on the SD card (not the heap) so
-  // yanking any number of lines costs only a 128-byte stack buffer.
-  // Always ends in '\n' when non-empty.
-  static constexpr const char* VI_YANK_PATH = "/.crosspoint/edit/yank.txt";
-  uint32_t viYankLen_ = 0;  // bytes in the register file; 0 = empty. Reloaded in onEnter().
+  // Register for d/y/p, kept on the SD card (not the heap) so yanking any
+  // amount costs only a 128-byte stack buffer. File = one type byte
+  // (YANK_LINES / YANK_CHARS / YANK_BLOCK) + text. Lines and block text
+  // always end in '\n' (a block is one '\n'-terminated row per line).
+  static constexpr const char* VI_YANK_PATH = "/.crosspoint/edit/yank.bin";
+  static constexpr char YANK_LINES = 'L';
+  static constexpr char YANK_CHARS = 'C';
+  static constexpr char YANK_BLOCK = 'B';
+  uint32_t viYankLen_ = 0;  // text bytes in the register (after the type byte); 0 = empty. Reloaded in onEnter().
+  char viYankType_ = YANK_LINES;
+
+  // Visual mode: v (characters), V (lines), Ctrl-V (block/rectangle). The
+  // selection runs from viAnchor_ to the cursor; for a block, columns are
+  // display cells from the start of the logical line (wide chars = 2).
+  enum class ViVisual { None, Char, Line, Block };
+  ViVisual viVisual_ = ViVisual::None;
+  uint32_t viAnchor_ = 0;
+  uint32_t viGoalVcol_ = 0;  // cell column kept across block-mode j/k
+  bool viGoalValid_ = false;
+  // Selected byte range per laid-out row (selEnd_ <= selStart_ = none),
+  // computed in relayout() so render() does no document scanning.
+  uint32_t selStart_[MAX_GRID_ROWS] = {};
+  uint32_t selEnd_[MAX_GRID_ROWS] = {};
+  bool selNewline_[MAX_GRID_ROWS] = {};  // the row's '\n' is selected (shown as one cell)
+  // Block I/A: text typed on the first line is copied to the others on Esc.
+  struct BlockInsert {
+    bool active = false;
+    bool append = false;      // A pads short lines; I skips them
+    uint32_t vcol = 0;        // insert column
+    uint32_t startPos = 0;    // where typing began on the first line
+    uint32_t firstLine = 0;   // logical line start of the first line
+    uint32_t extraLines = 0;  // lines below the first one
+  };
+  BlockInsert viBlockInsert_;
+
+  struct BlockRect {
+    uint32_t firstLine;  // logical line start of the top line
+    uint32_t lines;      // number of lines
+    uint32_t c1, c2;     // inclusive cell columns
+  };
+  BlockRect blockRect();
+  uint32_t vcolOf(uint32_t pos);
+  int cellWidthAt(uint32_t pos);
+  uint32_t nextLineStart(uint32_t lineStart);  // UINT32_MAX at the last line
+  // Position in the line at cell `vcol` (after a wide char that straddles it).
+  // Short lines: pad with spaces if `pad`, else return UINT32_MAX.
+  uint32_t posAtVcol(uint32_t lineStart, uint32_t vcol, bool pad);
+  void blockRangeInLine(uint32_t lineStart, uint32_t c1, uint32_t c2, uint32_t& a, uint32_t& b);
+  void computeSelection();
+  bool viVisualOperator(char op);  // returns true if the document changed
+  void finishBlockInsert();
+  void viClampToLine();
+
+  // Register file helpers
+  bool yankOpen(HalFile& file, char type);
+  bool yankAppend(HalFile& file, uint32_t start, uint32_t end, uint32_t& written, char& last);
+  void viYankRange(uint32_t start, uint32_t end);  // characterwise
+  void viYankBlock(const BlockRect& r);
+  void viPutBlock(bool after);
 
   // Returns false for keys Normal mode leaves to the regular handler
   // (arrows, Home/End, PgUp/PgDn, Delete).
@@ -251,7 +305,7 @@ class EditorActivity final : public Activity {
   void viDeleteLines(uint32_t count);
   void viYankLines(uint32_t count);
   void viPut(bool below);
-  uint32_t insertYankAt(uint32_t at, uint32_t count);  // first `count` register bytes; returns bytes inserted
+  uint32_t insertYankAt(uint32_t at, uint32_t count);  // first `count` register text bytes; returns bytes inserted
 
   // ==========================================================================
   // Menu / file actions (M2)
