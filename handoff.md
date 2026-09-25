@@ -11,7 +11,14 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
 
 ## Next session — start here
 
-1. **Next feature candidates** (owner picks): undo (`u`), vi visual mode
+1. **Undo — owner decision (2026-09-25): one level is enough, and saving
+   clears it.** It's documented as a limitation in the README ("when undo is
+   added, it will be one level only"). An AI review the owner pasted suggested
+   doing operator+motion (`dw`, `d$`, `cw`, `y3j`) next: rewrite the existing
+   motions as range-returning functions, then add `d`/`c`/`y` and
+   characterwise yank together. README.en.md mirrors README.md; keep both in
+   sync.
+   **Next feature candidates** (owner picks): vi visual mode
    (owner would like blockwise/rectangle selection too), text selection and
    copy/paste in the plain editor; passkey display for keyboards that
    require MITM (FreeInk SDK `BleKeyboardHost.cpp:309-370`, MIT:

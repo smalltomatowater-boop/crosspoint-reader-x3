@@ -1,5 +1,7 @@
 # CrossPoint Reader X3 (Japanese / Terminal fork)
 
+**日本語** | [English](README.en.md)
+
 **XTeInk X3向けのCrossPoint Readerフォーク。** 日本語UI対応、tmuxターミナル、BLEキーボードで書けるテキストエディタ(かな漢字変換つき)を追加した魔改造版。
 
 Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) by Dave Allie (MIT License).
@@ -9,7 +11,7 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 ## このフォークで追加したもの
 
 ### 日本語UI (Migu1M フォント)
-- UIフォントをMigu1M（ひらがな・カタカナ・常用漢字サブセット）に置き換え
+- UIフォントをMigu1M（ひらがな・カタカナ・JIS第1水準漢字 2965字）に置き換え
 - フォントデータはフラッシュに埋め込み済み（SDカード不要）
 - 設定 → 言語 → 日本語 で切り替え可能
 
@@ -59,8 +61,9 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 - 編集: `x`、`dd`、`D`、`yy`、`p` `P`。コピーした行はSDカード(`/.crosspoint/edit/yank.txt`)に置くので、RAMを使わず、電源を切っても残ります
 - 入力モードへ: `i` `a` `I` `A` `o` `O`。入力モードではローマ字かな入力・漢字変換がそのまま使えます
 - Esc: 入力中のかなを確定してノーマルモードへ(変換候補の表示中は読みに戻す)。Escを2回続けると英数入力になります
-- コマンド: `:w` `:q` `:q!` `:wq` `:x`
-- 取り消し(`u`)とビジュアルモードは未対応です
+- コマンド: `:w`(保存)、`:w 名前`(名前を付けて保存)、`:e`(ファイル一覧から開く)、`:e 名前`(開く。無ければその名前で新規)、`:e! 名前`(変更を捨てて開く)、`:q` `:q!` `:wq` `:x`。名前に拡張子が無ければ `.txt` が付き、`/` で始まらない名前は今のファイルと同じフォルダ(無題なら `/notes`)になります。コマンド行は英数字のみ
+- 未対応: 取り消し(`u`)、ビジュアルモード、`dw` `cw` のようなオペレーターとモーションの組み合わせ
+- 取り消しを実装するときは1段だけの予定です(保存すると履歴は消えます)
 
 ## 漢字変換辞書のセットアップ
 
@@ -106,7 +109,7 @@ python3 x4_tmux_bridge.py --x4 http://X3_IP_ADDRESS --target x3-terminal:
 Migu1Mフォントを使用しています。
 
 - **Migu1M**: [itouhiro](https://mix-mplus-ipa.osdn.jp/) 作、M+ FONT LICENSE
-- フォントデータは `lib/EpdFont/builtinFonts/migu1m_ui_*.h` に埋め込み済み
+- フォントデータは `lib/EpdFont/builtinFonts/migu1m_term_{08,10,12}.h` に埋め込み済み(`scripts/build_migu_ui_fonts.py` で再生成)
 
 M+ FONT LICENSEの条件に従い、本プロジェクトでのMigu1M使用を表記します。
 
