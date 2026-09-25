@@ -2,6 +2,8 @@
 #include "EpdFontData.h"
 
 class EpdFont {
+  // Exact lookup: interval table, then the on-demand miss handler; no fallback.
+  const EpdGlyph* findGlyph(uint32_t cp) const;
   void getTextBounds(const char* string, int startX, int startY, int* minX, int* minY, int* maxX, int* maxY) const;
 
  public:
@@ -11,6 +13,10 @@ class EpdFont {
   void getTextDimensions(const char* string, int* w, int* h) const;
 
   const EpdGlyph* getGlyph(uint32_t cp) const;
+
+  /// True if the font really has cp — unlike getGlyph(), which falls back to
+  /// the replacement glyph (drawn as a blank box-sized gap) for missing ones.
+  bool hasGlyph(uint32_t cp) const;
 
   /// Returns the kerning adjustment (4.4 fixed-point in pixels) between two codepoints.
   /// Returns 0 if no kerning data exists for the pair.

@@ -284,6 +284,12 @@ void EditorActivity::convertStep(int dir) {
     compReading_.assign(len, '\0');
     compReading_.resize(document_.readAt(compStart_, compReading_.data(), len));
     candidates_ = buildConversionCandidates(dict_.get(), compReading_);
+    // SKK-JISYO.L lists rare kanji (JIS level 2 and beyond) that the editor
+    // font lacks; they would draw as blank gaps, so they are not offered.
+    candidates_.erase(
+        std::remove_if(candidates_.begin(), candidates_.end(),
+                       [this](const std::string& c) { return !renderer.canRenderText(EDITOR_FONT_ID, c.c_str()); }),
+        candidates_.end());
     if (candidates_.empty()) return;
     candIndex_ = 0;
     compose_ = ComposeState::Converting;

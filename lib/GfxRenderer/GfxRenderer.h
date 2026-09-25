@@ -188,6 +188,9 @@ class GfxRenderer {
   /// Returns the kerning adjustment between two adjacent codepoints.
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
+  // True if every codepoint of the UTF-8 text is in the font (none would be
+  // drawn as the replacement glyph). False for an unknown fontId.
+  bool canRenderText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,

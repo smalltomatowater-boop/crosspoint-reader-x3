@@ -1390,6 +1390,15 @@ int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint3
   return fp4::toPixel(kernFP);                                           // snap 4.4 fixed-point to nearest pixel
 }
 
+bool GfxRenderer::canRenderText(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  const auto it = fontMap.find(fontId);
+  if (it == fontMap.end()) return false;
+  while (const uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
+    if (!it->second.hasGlyph(cp, style)) return false;
+  }
+  return true;
+}
+
 int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style) const {
   // Advance table fast-path for SD card fonts during layout.
   // No kerning/ligature lookup — consistent with previous metadataOnly behavior
