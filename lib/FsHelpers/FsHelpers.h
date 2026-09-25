@@ -25,6 +25,9 @@ inline bool hasJpgExtension(const String& fileName) {
   return hasJpgExtension(std::string_view{fileName.c_str(), fileName.length()});
 }
 
+// Images the image viewer opens: .bmp, .png, .jpg/.jpeg (case-insensitive)
+bool hasImageExtension(std::string_view fileName);
+
 // Check for .png extension (case-insensitive)
 bool hasPngExtension(std::string_view fileName);
 inline bool hasPngExtension(const String& fileName) {

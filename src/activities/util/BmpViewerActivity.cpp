@@ -5,10 +5,14 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <JpegToBmpConverter.h>
+#include <Logging.h>
+#include <PngToBmpConverter.h>
 
 #include <algorithm>
 
 #include "CrossPointSettings.h"
+#include "Epub/converters/ImageDecoderFactory.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -37,7 +41,7 @@ void BmpViewerActivity::loadSiblingImages() {
       file.getName(name, sizeof(name));
       if (name[0] != '.') {
         std::string fname(name);
-        if (fname.length() >= 4 && fname.substr(fname.length() - 4) == ".bmp") {
+        if (FsHelpers::hasImageExtension(fname)) {
           siblingImages.push_back(fname);
         }
       }
@@ -69,6 +73,22 @@ void BmpViewerActivity::onEnter() {
   const auto pageHeight = renderer.getScreenHeight();
   Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
+
+  if (!FsHelpers::hasBmpExtension(filePath)) {
+    const bool hasPrevious = (siblingImages.size() > 1 && currentImageIndex > 0);
+    const bool hasNext = (siblingImages.size() > 1 && currentImageIndex != -1 &&
+                          currentImageIndex < static_cast<int>(siblingImages.size()) - 1);
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER), (hasPrevious ? "<" : ""), (hasNext ? ">" : ""));
+    if (!renderDecodedImage(labels.btn1, labels.btn2, labels.btn3, labels.btn4)) {
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_MEMORY_ERROR));
+      const auto backOnly = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+      GUI.drawButtonHints(renderer, backOnly.btn1, backOnly.btn2, backOnly.btn3, backOnly.btn4);
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    }
+    return;
+  }
   // 1. Open the file
   if (Storage.openFileForRead("BMP", filePath, file)) {
     Bitmap bitmap(file, true);
@@ -137,11 +157,81 @@ void BmpViewerActivity::onEnter() {
   }
 }
 
+bool BmpViewerActivity::renderDecodedImage(const char* btn1, const char* btn2, const char* btn3, const char* btn4) {
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(filePath);
+  ImageDimensions dims{};
+  if (!decoder || !decoder->getDimensions(filePath, dims) || dims.width <= 0 || dims.height <= 0) {
+    LOG_ERR("IMGV", "Cannot decode %s (free %u, largest %u)", filePath.c_str(), ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
+    return false;
+  }
+
+  // Fit inside the screen, centred, never upscaled (the decoder applies the
+  // same rule to maxWidth/maxHeight; this just works out the offset).
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  float scale = std::min(static_cast<float>(pageWidth) / dims.width, static_cast<float>(pageHeight) / dims.height);
+  if (scale > 1.0f) scale = 1.0f;
+  RenderConfig config;
+  config.x = (pageWidth - static_cast<int>(dims.width * scale)) / 2;
+  config.y = (pageHeight - static_cast<int>(dims.height * scale)) / 2;
+  config.maxWidth = pageWidth;
+  config.maxHeight = pageHeight;
+  config.useGrayscale = true;
+  config.useDithering = true;
+
+  renderer.clearScreen();
+  if (!decoder->decodeToFramebuffer(filePath, renderer, config)) {
+    LOG_ERR("IMGV", "%s decode failed: %s", decoder->getFormatName(), filePath.c_str());
+    return false;
+  }
+  GUI.drawButtonHints(renderer, btn1, btn2, btn3, btn4);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+
+  // Grayscale: decode into the LSB and MSB planes and show them, then decode
+  // the BW frame once more and re-sync the controller with it for the next
+  // differential refresh. Re-decoding (~1.2s for a screen-sized PNG) instead
+  // of stashing the BW frame saves 52KB, which the decoder needs itself.
+  renderer.clearScreen(0x00);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+  const bool lsb = decoder->decodeToFramebuffer(filePath, renderer, config);
+  if (lsb) renderer.copyGrayscaleLsbBuffers();
+  renderer.clearScreen(0x00);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+  const bool msb = lsb && decoder->decodeToFramebuffer(filePath, renderer, config);
+  if (msb) {
+    renderer.copyGrayscaleMsbBuffers();
+    renderer.displayGrayBuffer();
+  }
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.clearScreen();
+  if (decoder->decodeToFramebuffer(filePath, renderer, config)) {
+    GUI.drawButtonHints(renderer, btn1, btn2, btn3, btn4);
+    if (msb) renderer.cleanupGrayscaleWithFrameBuffer();
+  } else {
+    LOG_ERR("IMGV", "BW re-decode failed");
+  }
+  return true;
+}
+
 void BmpViewerActivity::onExit() {
   Activity::onExit();
   renderer.clearScreen();
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
+
+namespace {
+// Separate (not inlined) so its 2KB buffer is only on the stack while
+// copying a BMP, not under the PNG/JPEG converters' own frames.
+__attribute__((noinline)) bool copyFile(HalFile& in, HalFile& out) {
+  char buffer[2048];
+  int bytesRead;
+  while ((bytesRead = in.read(buffer, sizeof(buffer))) > 0) {
+    if (out.write(buffer, bytesRead) != static_cast<size_t>(bytesRead)) return false;
+  }
+  return true;
+}
+}  // namespace
 
 void BmpViewerActivity::doSetSleepCover() {
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
@@ -150,16 +240,17 @@ void BmpViewerActivity::doSetSleepCover() {
   HalFile inFile, outFile;
   if (Storage.openFileForRead("BMP", filePath, inFile)) {
     if (Storage.openFileForWrite("BMP", "/sleep.bmp", outFile)) {
-      char buffer[2048];
-      int bytesRead;
-      success = true;
-      while ((bytesRead = inFile.read(buffer, sizeof(buffer))) > 0) {
-        if (outFile.write(buffer, bytesRead) != bytesRead) {
-          success = false;
-          break;
-        }
+      if (FsHelpers::hasPngExtension(filePath)) {
+        // The sleep screen reads BMP only: convert this one image, fitted
+        // to the screen (not cropped; the cover-mode setting still applies).
+        success = PngToBmpConverter::pngFileToBmpStream(inFile, outFile, /*crop=*/false);
+      } else if (FsHelpers::hasJpgExtension(filePath)) {
+        success = JpegToBmpConverter::jpegFileToBmpStream(inFile, outFile, /*crop=*/false);
+      } else {
+        success = copyFile(inFile, outFile);
       }
       outFile.close();
+      if (!success) Storage.remove("/sleep.bmp");  // don't leave a half-written cover
     }
     inFile.close();
   }

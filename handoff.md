@@ -51,6 +51,20 @@ is an **X3** (display 792×528, DS3231 RTC). Plan of record: Claude plan
    **Owner: the editor is feature-complete.** Typewriter scrolling was
    dropped. Remaining ideas if wanted: operator+motion (`dw`, `cw`), passkey
    display for MITM keyboards.
+   **PNG/JPEG viewer and sleep cover (2026-09-25, owner-verified)**:
+   `BmpViewerActivity` opens BMP, PNG and JPEG (`FsHelpers::hasImageExtension`;
+   the file browser and `ReaderActivity::isBmpFile` use it). PNG/JPEG go
+   through the EPUB decoders (`ImageDecoderFactory`). The sequence is: BW
+   decode + display, LSB and MSB decodes + `displayGrayBuffer`, then a BW
+   re-decode + `cleanupGrayscaleWithFrameBuffer`. That's 4 decodes, ~1.1s each
+   for a 400x800 PNG. The re-decode replaced `storeBwBuffer()`, whose 52KB
+   left the PNG decoder without its gray line buffer. "Set as sleep screen"
+   converts PNG/JPEG to `/sleep.bmp` (`PngToBmpConverter` / `JpegToBmpConverter`,
+   fit, not cropped). That crashed with a loopTask stack protection fault (8KB
+   stack): `PngDecodeContext` (~3.5KB) is now heap-allocated, and the BMP
+   copy's 2KB buffer lives in a separate noinline `copyFile()`.
+   Also seen: the home screen's XTC thumbnail allocation (104,544 bytes) can
+   fail; that's pre-existing and unrelated.
    **Heap fragmentation after the editor (fixed 2026-09-25)**: the XTC
    reader showed メモリエラー after the editor had been used. Its 52,272-byte
    page buffer (792/8 × 528) needs one contiguous block, and the largest

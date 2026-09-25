@@ -29,6 +29,10 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 - Power-loss-safe saving (the new file is written to a temporary file, then swapped in)
 - Optional vi mode (see below)
 
+### Image viewer (PNG / JPEG)
+- Open `.png` / `.jpg` / `.jpeg` from the file browser, in the same viewer as BMP. Left/Right step through the images in the folder, and images are shown in grayscale.
+- "Set as sleep screen" works for PNG/JPEG too. The sleep screen reads BMP only, so that one image is converted to `/sleep.bmp`.
+
 ### Bug fixes
 - `EpdFont::getGlyph()`: fixed a null-pointer dereference when looking up a CJK glyph in stub mode
 

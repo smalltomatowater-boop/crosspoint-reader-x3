@@ -28,6 +28,10 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 - 横向き・12pt・57桁×16行。ファイル全体をメモリに読み込まないので長い文書も扱える
 - 保存は電源断に強い方式(一時ファイルに書いてから入れ替え)
 
+### 画像ビューア (PNG / JPEG)
+- ファイル一覧で `.png` / `.jpg` / `.jpeg` を開けます(BMPと同じビューア。左右ボタンで同じフォルダの前後の画像へ、グレー表示あり)
+- 「スリープ画面に設定」でPNG/JPEGも壁紙にできます(スリープ画面用に `/sleep.bmp` へ1枚だけ変換)
+
 ### バグ修正
 - `EpdFont::getGlyph()` — stubモードでCJKグリフ参照時にnullポインタを踏むバグを修正
 

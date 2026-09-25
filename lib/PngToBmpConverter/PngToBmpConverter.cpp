@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <InflateReader.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <cstdio>
 #include <cstring>
@@ -497,8 +498,15 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     return false;
   }
 
-  // Initialize decode context
-  PngDecodeContext ctx = {};
+  // Initialize decode context. On the heap: with its 2KB read buffer and
+  // the inflate state it is ~3.5KB, and callers on the 8KB loop task (the
+  // image viewer's "set as sleep screen") overflowed the stack.
+  auto ctxOwner = makeUniqueNoThrow<PngDecodeContext>();
+  if (!ctxOwner) {
+    LOG_ERR("PNG", "OOM: decode context (%u bytes)", static_cast<unsigned>(sizeof(PngDecodeContext)));
+    return false;
+  }
+  PngDecodeContext& ctx = *ctxOwner;
   ctx.file = &pngFile;
   ctx.width = width;
   ctx.height = height;
