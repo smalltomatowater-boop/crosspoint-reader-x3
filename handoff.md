@@ -34,6 +34,17 @@ because its pinned commit 8cab3b2 existed only locally and CI's checkout
 failed with "not our ref". Any future local SDK commit must be pushed there
 before the main repo's pointer is pushed.
 
+Crash fixed 2026-09-25: Save As crashed after ~90s in the filename
+keyboard with "Interrupt wdt timeout on CPU0", right after "NimBLE: HCI
+wait for ack returned 19". The keyboard screen is a sub-activity, so the
+editor's `skipLoopDelay()` no longer held full CPU speed, and
+`HalPowerManager` dropped the CPU frequency while BLE was scanning. It
+already refused power saving while Wi-Fi was on; it now also refuses while
+`esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED`.
+Verified: ~4 min on the keyboard screen with no low-power switch or panic,
+then saved. (The panic address wasn't decoded — the local ELF no longer
+matched the flashed one.)
+
 To test the editor you need the dictionary at `/dict/skk.txt` on the SD
 card — see README "漢字変換辞書のセットアップ".
 

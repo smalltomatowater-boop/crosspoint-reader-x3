@@ -2,6 +2,7 @@
 
 #include <Logging.h>
 #include <WiFi.h>
+#include <esp_bt.h>
 #include <esp_sleep.h>
 
 #include <cassert>
@@ -33,6 +34,13 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   auto wifiMode = WiFi.getMode();
   if (wifiMode != WIFI_MODE_NULL) {
     // Wifi is active, force disabling power saving
+    enabled = false;
+  }
+  if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
+    // Same for BLE (editor keyboard): lowering the CPU frequency while the
+    // controller is scanning stalled it — "NimBLE: HCI wait for ack returned
+    // 19" followed by an interrupt-WDT panic, seen with the filename keyboard
+    // (a sub-activity, so the editor's skipLoopDelay no longer held full speed).
     enabled = false;
   }
 
