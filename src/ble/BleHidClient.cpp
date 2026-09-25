@@ -8,6 +8,12 @@
 static const char* HID_SERVICE_UUID = "1812";
 static const char* HID_REPORT_UUID = "2a4d";
 static constexpr int KEY_QUEUE_LEN = 32;
+// Idea from the FreeInk SDK's BleKeyboardHost (MIT): a bounded connect timeout
+// (NimBLE's default is 30 s) and an 8 s link supervision timeout, so long
+// blocking work on this single core (saving, flattening) can't drop the link.
+static constexpr uint32_t CONNECT_TIMEOUT_MS = 8000;
+static constexpr uint32_t PAIRING_SCAN_MS = 5000;    // scan slot between bonded attempts
+static constexpr uint32_t UNBONDED_SCAN_MS = 10000;  // no bonds yet: just scan
 
 BleHidClient* BleHidClient::instance_ = nullptr;
 
@@ -66,8 +72,8 @@ void BleHidClient::onDisconnect(NimBLEClient* client, int reason) {
 }
 
 void BleHidClient::onResult(const NimBLEAdvertisedDevice* device) {
-  if (!device->haveServiceUUID()) return;
-  if (!device->isAdvertisingService(NimBLEUUID(HID_SERVICE_UUID))) return;
+  const bool hid = device->haveServiceUUID() && device->isAdvertisingService(NimBLEUUID(HID_SERVICE_UUID));
+  if (!hid && !NimBLEDevice::isBonded(device->getAddress())) return;
   LOG_INF("BLEH", "HID device found: %s", device->getAddress().toString().c_str());
   NimBLEDevice::getScan()->stop();
   delete device_;
@@ -84,8 +90,7 @@ void BleHidClient::onScanEnd(const NimBLEScanResults& results, int reason) {
 // Connection (runs inside BLE task)
 // ============================================================================
 
-bool BleHidClient::connectToDevice() {
-  if (!device_) return false;
+bool BleHidClient::connectTo(const NimBLEAddress& address) {
   subscribeFailed_ = false;
 
   if (client_) {
@@ -93,11 +98,21 @@ bool BleHidClient::connectToDevice() {
     client_ = nullptr;
   }
 
-  client_ = NimBLEDevice::createClient(device_->getAddress());
+  client_ = NimBLEDevice::createClient(address);
+  if (!client_) {
+    LOG_ERR("BLEH", "createClient failed");
+    return false;
+  }
   client_->setClientCallbacks(this, false);
+  client_->setConnectTimeout(CONNECT_TIMEOUT_MS);
+  // Units: interval 1.25 ms (15-30 ms), supervision timeout 10 ms (8 s).
+  client_->setConnectionParams(12, 24, 0, 800);
 
-  LOG_INF("BLEH", "Connecting...");
-  if (!client_->connect()) {
+  LOG_INF("BLEH", "Connecting to %s...", address.toString().c_str());
+  connecting_ = true;
+  const bool linked = client_->connect();
+  connecting_ = false;
+  if (!linked) {
     LOG_ERR("BLEH", "Connection failed");
     NimBLEDevice::deleteClient(client_);
     client_ = nullptr;
@@ -130,7 +145,7 @@ bool BleHidClient::connectToDevice() {
     // instead of silently retrying forever (see bleTaskRun()'s
     // subscribeFailed_ latch). Because this now stops the retry loop that
     // used to delete the stale client_ at the top of the *next*
-    // connectToDevice() call, this is the last chance to free it — NimBLE's
+    // connectTo() call, this is the last chance to free it — NimBLE's
     // per-connection GATT cache is large (measured ~60KB on device) and is
     // not released by disconnect() alone.
     subscribeFailed_ = true;
@@ -147,15 +162,37 @@ bool BleHidClient::connectToDevice() {
   return true;
 }
 
-void BleHidClient::startScan() {
+void BleHidClient::startScan(uint32_t durationMs) {
   scanning_ = true;
   NimBLEScan* scan = NimBLEDevice::getScan();
   scan->setScanCallbacks(this);
   scan->setInterval(100);
   scan->setWindow(99);
   scan->setActiveScan(true);
-  scan->start(10000);  // 10 s in ms
+  scan->start(durationMs);
   LOG_INF("BLEH", "Scanning for HID keyboards...");
+}
+
+bool BleHidClient::tryBondedReconnect() {
+  // Newest bond first: NimBLE appends new bonds to the end of its store, and
+  // keyboards that take a fresh address on every re-pair leave older, dead
+  // entries in front that would each cost a full CONNECT_TIMEOUT_MS.
+  const int bonds = NimBLEDevice::getNumBonds();
+  for (int i = bonds - 1; i >= 0 && !stopRequested_; --i) {
+    const NimBLEAddress addr = NimBLEDevice::getBondedAddress(i);
+    if (addr.isNull()) continue;
+    if (connectTo(addr)) return true;
+    if (subscribeFailed_) {
+      // The link came up but the encrypted subscribe failed: the keyboard has
+      // most likely dropped our keys (re-paired elsewhere). Forget the stale
+      // bond so it can be paired afresh from pairing mode, instead of latching.
+      LOG_INF("BLEH", "Dropping stale bond %s", addr.toString().c_str());
+      NimBLEDevice::deleteBond(addr);
+      subscribeFailed_ = false;
+      return false;  // bond list changed under the index; rescan from the top
+    }
+  }
+  return false;
 }
 
 // ============================================================================
@@ -175,26 +212,28 @@ void BleHidClient::bleTaskRun() {
   // (CONFIG_BT_NIMBLE_NVS_PERSIST) so later reconnects skip pairing.
   NimBLEDevice::setSecurityAuth(/*bonding=*/true, /*mitm=*/false, /*sc=*/true);
   bleRunning_ = true;
-  startScan();
 
   while (!stopRequested_) {
     if (connectPending_) {
       connectPending_ = false;
       scanning_ = false;
-      if (!connectToDevice() && !subscribeFailed_) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        if (!stopRequested_) startScan();
-      }
+      if (device_) connectTo(device_->getAddress());
     }
     // subscribeFailed_ latches: once a keyboard has refused the HID report
     // subscribe (most likely because it requires encryption, which v1 has no
     // pairing/bonding for), stop scanning/reconnecting rather than retrying
     // forever against the same keyboard — surfaced to the UI instead
     // (isSubscribeFailed()). A fresh begin() (re-entering the editor) is what
-    // resets it, via connectToDevice()'s own `subscribeFailed_ = false`.
+    // resets it, via connectTo()'s own `subscribeFailed_ = false`.
     if (!connected_ && !scanning_ && !connectPending_ && !subscribeFailed_) {
-      vTaskDelay(pdMS_TO_TICKS(500));
-      if (!stopRequested_) startScan();
+      // Bonded keyboards first (direct connect, no pairing mode needed), then
+      // a short scan so a new keyboard in pairing mode can still be found.
+      const bool haveBonds = NimBLEDevice::getNumBonds() > 0;
+      if (haveBonds && tryBondedReconnect()) continue;
+      vTaskDelay(pdMS_TO_TICKS(200));
+      if (!stopRequested_ && !subscribeFailed_ && !connected_) {
+        startScan(haveBonds ? PAIRING_SCAN_MS : UNBONDED_SCAN_MS);
+      }
     }
     vTaskDelay(pdMS_TO_TICKS(50));
   }
@@ -231,9 +270,14 @@ void BleHidClient::stop() {
   // Signal scan/connect to abort (only valid while NimBLE is initialized —
   // calling getScan() before init/deinit crashes).
   if (bleRunning_ || bleTask_) NimBLEDevice::getScan()->stop();
+  // A direct connect blocks inside client_->connect() for up to
+  // CONNECT_TIMEOUT_MS; cancel it rather than deleting the task under NimBLE
+  // (which leaves the host/controller inconsistent). client_ is not deleted
+  // while connecting_ is set.
+  if (connecting_ && client_) client_->cancelConnect();
   if (bleTask_) {
-    // Wait up to 3s for the task to exit
-    for (int i = 0; i < 60 && bleTask_ && eTaskGetState(bleTask_) != eDeleted; i++) {
+    // Wait up to 10s for the task to exit (covers a connect that ignores the cancel)
+    for (int i = 0; i < 200 && bleTask_ && eTaskGetState(bleTask_) != eDeleted; i++) {
       vTaskDelay(pdMS_TO_TICKS(50));
     }
     if (bleTask_ && eTaskGetState(bleTask_) != eDeleted) {

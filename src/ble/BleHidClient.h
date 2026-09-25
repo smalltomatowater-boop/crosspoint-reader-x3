@@ -91,12 +91,17 @@ class BleHidClient : public NimBLEClientCallbacks, public NimBLEScanCallbacks {
   volatile bool ready_ = false;
   volatile bool subscribeFailed_ = false;
   volatile bool bleRunning_ = false;  // guards getScan() before init/deinit
+  volatile bool connecting_ = false;  // inside client_->connect(); stop() cancels it
 
   // Previous report's keycode slots (accessed only from the NimBLE task).
   uint8_t lastReportKeys_[6] = {};
 
-  bool connectToDevice();
-  void startScan();
+  bool connectTo(const NimBLEAddress& address);
+  // Connects straight to each bonded keyboard in turn (no scan): a bonded
+  // keyboard waking from sleep often advertises without the HID service UUID
+  // (or only directed at us), so scanning for HID advertisers misses it.
+  bool tryBondedReconnect();
+  void startScan(uint32_t durationMs);
   void bleTaskRun();
   void enqueueKey(uint8_t usage, uint8_t mods);
 
