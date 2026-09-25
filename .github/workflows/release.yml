@@ -61,4 +61,5 @@ jobs:
             .pio/build/gh_release/bootloader.bin \
             .pio/build/gh_release/partitions.bin \
             --title "CrossPoint Reader X3 ${{ github.ref_name }}" \
+            --notes-file .github/release-notes-header.md \
             --generate-notes

@@ -16,6 +16,8 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 
 From 1.4.0 on, "Check for updates" (OTA) in Settings fetches this fork's new releases. **On 1.3.0 or earlier, OTA installs the upstream firmware, which removes the Japanese UI and the editor.** Update from 1.3.0 or earlier with the SD card.
 
+If a new release causes problems, download an earlier release's `firmware.bin` from Releases and install it the same way to roll back.
+
 ---
 
 ## What this fork adds
@@ -67,11 +69,10 @@ Device buttons: "Menu" opens Save / Save As / Open / New / Exit. "« Home" leave
 - "Save" on a new document doesn't ask for a name. It saves to `/notes/YYYYMMDD-HHMM.txt`. If the clock has no date yet, the name is a number such as `/notes/memo-001.txt`. Sync the clock over Wi-Fi once ("Sync clock now" in Settings) to get dated names.
 - A keyboard you've paired once reconnects automatically the next time you open the editor. No pairing mode needed.
 - Kanji the display font lacks (anything outside JIS level 1) are not offered as candidates.
+- Settings → "Display" → "Editor White on Black" shows white text on black.
 - In kana mode, digits and symbols are full-width, and `,` `.` `[` `]` `/` become `、` `。` `「` `」` `・`.
 
 ### Vi mode
-
-White on black: Settings → "Display" → "Editor White on Black".
 
 Turn on Settings → "Controls" → "Editor Vi Mode" for vi-style modal editing. With it off, the editor works as described above. With it on, the editor starts in Normal mode.
 
