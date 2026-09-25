@@ -46,6 +46,7 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 | Esc / Backspace | Cancel conversion and go back to the reading |
 | Arrows, Home/End, PgUp/PgDn | Move the cursor |
 | Ctrl+S | Save |
+| Ctrl+Z / Ctrl+Y | Undo / redo (multi-level; each line or cursor move starts a new step) |
 
 Device buttons: "Menu" opens Save / Save As / Open / New / Exit. "« Home" leaves the editor (asks first if there are unsaved changes).
 
@@ -69,8 +70,8 @@ Turn on Settings → "Controls" → "Editor Vi Mode" for vi-style modal editing.
   - A name with no extension gets `.txt`. A name that doesn't start with `/` goes in the current file's folder, or `/notes` for an untitled document.
   - The command line takes ASCII only.
 - Caps Lock does nothing in Normal mode.
-- Not supported: undo (`u`), visual mode, and operator + motion combinations such as `dw` or `cw`.
-- When undo is added, it will be one level only, and saving will clear it.
+- Undo: `u`; redo: `Ctrl-R`. Multi-level; one Normal-mode command, or one line typed in Insert mode, is one step. Deleted text is kept on the SD card (`/.crosspoint/edit/undo.bin`), and saving keeps the history.
+- Not supported: visual mode, and operator + motion combinations such as `dw` or `cw`.
 
 ## Setting up the kanji dictionary
 

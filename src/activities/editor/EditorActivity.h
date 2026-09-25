@@ -165,6 +165,53 @@ class EditorActivity final : public Activity {
   void replaceComposition(const std::string& text);
 
   // ==========================================================================
+  // Undo / redo (vi "u" / Ctrl-R; Ctrl+Z / Ctrl+Y), multi-level
+  // ==========================================================================
+
+  // Every document edit goes through editInsert()/editDelete(), which record
+  // the current change as position-based ops. They stay valid across
+  // flatten() and save (neither moves text), so saving doesn't clear undo.
+  // Deleted text is copied to an SD file, not the heap.
+  //
+  // One array holds both stacks: undo groups grow up from index 0, redo
+  // groups grow down from the top. A group is its ops in application order,
+  // the first one flagged UNDO_GROUP_START. Reverting a group applies its
+  // ops' inverses newest first; those inverses, in that order, are the group
+  // that reverts the revert, so undo and redo are the same operation.
+  struct UndoOp {
+    uint32_t pos;
+    uint32_t len;
+    uint32_t fileOff;  // flag bits below | offset of the deleted text in UNDO_PATH
+  };
+  static constexpr uint32_t UNDO_INSERT_FLAG = 0x80000000u;  // op inserted [pos, pos+len); no text
+  static constexpr uint32_t UNDO_GROUP_START = 0x40000000u;
+  static constexpr uint32_t UNDO_OFF_MASK = 0x3FFFFFFFu;
+  static constexpr uint16_t MAX_UNDO_OPS = 256;  // 3KB; a typed line coalesces into one op
+  static constexpr const char* UNDO_PATH = "/.crosspoint/edit/undo.bin";
+  UndoOp undoOps_[MAX_UNDO_OPS] = {};
+  uint16_t undoCount_ = 0;          // undo ops at [0, undoCount_)
+  uint16_t redoCount_ = 0;          // redo ops at [MAX_UNDO_OPS - redoCount_, MAX_UNDO_OPS)
+  uint16_t currentGroupStart_ = 0;  // first undo index of the change being recorded
+  bool changeOpen_ = false;         // the next edit extends the current change instead of starting one
+  bool groupDropped_ = false;       // current change outgrew the whole array: not undoable
+  uint32_t undoFileEnd_ = 0;
+  HalFile undoFile_;  // member file: closed in onExit()
+
+  bool editInsert(uint32_t pos, std::string_view text);
+  void editDelete(uint32_t pos, uint32_t len);
+  void closeChange() { changeOpen_ = false; }
+  void openChange();
+  void pushUndoOp(const UndoOp& op);
+  bool copyToUndoFile(uint32_t pos, uint32_t len, uint32_t& outOff);
+  bool insertFromUndoFile(uint32_t pos, uint32_t len, uint32_t fileOff);
+  // Reverts the ops at [start, end) in place (each becomes its inverse, then
+  // the block is reversed). Returns the lowest position touched, or UINT32_MAX on failure.
+  uint32_t revertBlock(uint16_t start, uint16_t end);
+  void undoLastChange();
+  void redoLastChange();
+  void resetUndo();
+
+  // ==========================================================================
   // Vi mode (Settings > Controls > Editor Vi Mode)
   // ==========================================================================
 

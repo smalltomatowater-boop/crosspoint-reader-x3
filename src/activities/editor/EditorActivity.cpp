@@ -56,6 +56,9 @@ constexpr uint8_t HID_D = 0x07;
 constexpr uint8_t HID_F = 0x09;
 constexpr uint8_t HID_S = 0x16;
 constexpr uint8_t HID_U = 0x18;
+constexpr uint8_t HID_Z_KEY = 0x1D;
+constexpr uint8_t HID_R = 0x15;
+constexpr uint8_t HID_Y = 0x1C;
 constexpr uint8_t HID_Z = 0x1D;
 
 constexpr uint8_t MOD_LCTRL = 0x01;
@@ -163,6 +166,7 @@ void EditorActivity::onEnter() {
 
   viEnabled_ = SETTINGS.editorViMode != 0;
   viMode_ = viEnabled_ ? ViMode::Normal : ViMode::Insert;
+  resetUndo();
   viYankLen_ = 0;
   if (viEnabled_ && Storage.exists(VI_YANK_PATH)) {
     // The register survives power-off: pick up the last yank from the SD card.
@@ -208,6 +212,7 @@ void EditorActivity::onExit() {
   bleHid_.stop();
   dict_.reset();
   if (dictFile_) dictFile_.close();
+  if (undoFile_) undoFile_.close();
   document_.close();
   renderer.setOrientation(savedOrientation_);
   Activity::onExit();
@@ -284,7 +289,7 @@ void EditorActivity::commitComposition() {
 }
 
 void EditorActivity::replaceComposition(const std::string& text) {
-  document_.deleteAt(compStart_, cursorPos_ - compStart_);
+  editDelete(compStart_, cursorPos_ - compStart_);
   cursorPos_ = compStart_;
   insertText(text);
 }
@@ -333,11 +338,200 @@ uint32_t EditorActivity::readDictFile(void* ctx, uint32_t pos, char* buf, uint32
 
 void EditorActivity::insertText(const std::string& text) {
   if (text.empty()) return;
-  if (document_.insertAt(cursorPos_, text)) {
+  if (editInsert(cursorPos_, text)) {
     cursorPos_ += static_cast<uint32_t>(text.size());
   } else {
     LOG_ERR("EDTR", "Failed to insert %zu bytes at %u", text.size(), cursorPos_);
   }
+}
+
+// ============================================================================
+// Undo
+// ============================================================================
+
+void EditorActivity::resetUndo() {
+  undoCount_ = 0;
+  redoCount_ = 0;
+  currentGroupStart_ = 0;
+  changeOpen_ = false;
+  groupDropped_ = false;
+  undoFileEnd_ = 0;
+  if (undoFile_.isOpen()) return;
+  Storage.mkdir("/.crosspoint");  // may run before EditorDocument has created its folders
+  Storage.mkdir("/.crosspoint/edit");
+  if (!Storage.openFileForWrite("EDTR", UNDO_PATH, undoFile_)) {
+    LOG_ERR("EDTR", "Undo disabled: cannot open %s", UNDO_PATH);
+  }
+}
+
+void EditorActivity::openChange() {
+  if (changeOpen_) return;
+  changeOpen_ = true;
+  groupDropped_ = !undoFile_.isOpen();
+  redoCount_ = 0;                         // a new edit forgets what was undone
+  if (undoCount_ == 0) undoFileEnd_ = 0;  // nothing references the file any more
+  currentGroupStart_ = undoCount_;
+}
+
+void EditorActivity::pushUndoOp(const UndoOp& op) {
+  if (groupDropped_) return;
+  if (undoCount_ == MAX_UNDO_OPS) {
+    if (currentGroupStart_ == 0) {
+      // This one change fills the whole history: it can't be undone.
+      undoCount_ = 0;
+      groupDropped_ = true;
+      LOG_INF("EDTR", "Change too large to undo");
+      return;
+    }
+    // Forget the oldest change.
+    uint16_t next = 1;
+    while (next < undoCount_ && !(undoOps_[next].fileOff & UNDO_GROUP_START)) ++next;
+    memmove(undoOps_, undoOps_ + next, (undoCount_ - next) * sizeof(UndoOp));
+    undoCount_ -= next;
+    currentGroupStart_ -= next;
+  }
+  UndoOp stored = op;
+  if (undoCount_ == currentGroupStart_) stored.fileOff |= UNDO_GROUP_START;
+  undoOps_[undoCount_++] = stored;
+}
+
+bool EditorActivity::copyToUndoFile(uint32_t pos, uint32_t len, uint32_t& outOff) {
+  if (undoFileEnd_ + len > UNDO_OFF_MASK || !undoFile_.seekSet(undoFileEnd_)) return false;
+  outOff = undoFileEnd_;
+  char buf[128];
+  for (uint32_t done = 0; done < len;) {
+    const uint32_t got = document_.readAt(pos + done, buf, std::min<uint32_t>(sizeof(buf), len - done));
+    if (got == 0 || undoFile_.write(buf, got) != got) return false;
+    done += got;
+  }
+  undoFileEnd_ += len;
+  return true;
+}
+
+bool EditorActivity::insertFromUndoFile(uint32_t pos, uint32_t len, uint32_t fileOff) {
+  if (!undoFile_.seekSet(fileOff)) return false;
+  char buf[128];
+  for (uint32_t done = 0; done < len;) {
+    const int got = undoFile_.read(buf, std::min<uint32_t>(sizeof(buf), len - done));
+    if (got <= 0) return false;
+    if (!document_.insertAt(pos + done, std::string_view(buf, static_cast<size_t>(got)))) return false;
+    done += static_cast<uint32_t>(got);
+  }
+  return true;
+}
+
+bool EditorActivity::editInsert(uint32_t pos, std::string_view text) {
+  if (!document_.insertAt(pos, text)) return false;
+  openChange();
+  const auto len = static_cast<uint32_t>(text.size());
+  if (!groupDropped_ && undoCount_ > currentGroupStart_) {
+    UndoOp& last = undoOps_[undoCount_ - 1];
+    if ((last.fileOff & UNDO_INSERT_FLAG) && pos == last.pos + last.len) {
+      last.len += len;  // typing: one op for the whole run
+      return true;
+    }
+  }
+  pushUndoOp({pos, len, UNDO_INSERT_FLAG});
+  return true;
+}
+
+void EditorActivity::editDelete(uint32_t pos, uint32_t len) {
+  if (len == 0) return;
+  openChange();
+  bool recorded = groupDropped_;
+  if (!recorded && undoCount_ > currentGroupStart_) {
+    UndoOp& last = undoOps_[undoCount_ - 1];
+    // Deleting the tail of text this change just inserted (Backspace while
+    // typing, a conversion replacing its reading) just un-inserts it.
+    if ((last.fileOff & UNDO_INSERT_FLAG) && pos >= last.pos && pos + len == last.pos + last.len) {
+      last.len -= len;
+      if (last.len == 0) --undoCount_;  // the group-start flag goes with it; the next push re-flags
+      recorded = true;
+    }
+  }
+  if (!recorded) {
+    uint32_t off = 0;
+    if (copyToUndoFile(pos, len, off)) {
+      pushUndoOp({pos, len, off});
+    } else {
+      // Can't keep the text: drop the history rather than undo into garbage.
+      LOG_ERR("EDTR", "Undo: SD write failed; history cleared");
+      undoCount_ = 0;
+      currentGroupStart_ = 0;
+      groupDropped_ = true;
+    }
+  }
+  document_.deleteAt(pos, len);
+}
+
+uint32_t EditorActivity::revertBlock(uint16_t start, uint16_t end) {
+  uint32_t minPos = UINT32_MAX;
+  for (int i = end - 1; i >= static_cast<int>(start); --i) {
+    UndoOp& op = undoOps_[i];
+    if (op.fileOff & UNDO_INSERT_FLAG) {
+      uint32_t off = 0;
+      if (!copyToUndoFile(op.pos, op.len, off)) return UINT32_MAX;
+      document_.deleteAt(op.pos, op.len);
+      op.fileOff = off;
+    } else {
+      if (!insertFromUndoFile(op.pos, op.len, op.fileOff & UNDO_OFF_MASK)) return UINT32_MAX;
+      op.fileOff = UNDO_INSERT_FLAG;
+    }
+    minPos = std::min(minPos, op.pos);
+  }
+  std::reverse(undoOps_ + start, undoOps_ + end);
+  undoOps_[start].fileOff |= UNDO_GROUP_START;
+  return minPos;
+}
+
+void EditorActivity::undoLastChange() {
+  commitComposition();
+  romajiKana_.clear();
+  closeChange();
+  if (undoCount_ == 0) {
+    LOG_DBG("EDTR", "Nothing to undo");
+    return;
+  }
+  uint16_t start = undoCount_ - 1;
+  while (start > 0 && !(undoOps_[start].fileOff & UNDO_GROUP_START)) --start;
+  const uint16_t len = undoCount_ - start;
+  const uint32_t minPos = revertBlock(start, undoCount_);
+  if (minPos == UINT32_MAX) {
+    LOG_ERR("EDTR", "Undo failed (SD I/O); history cleared");
+    resetUndo();
+    return;
+  }
+  // Move the reverted group onto the redo stack. undo + redo never exceed
+  // the array, so the destination fits; the ranges may overlap (memmove).
+  const uint16_t dest = MAX_UNDO_OPS - redoCount_ - len;
+  memmove(undoOps_ + dest, undoOps_ + start, len * sizeof(UndoOp));
+  undoCount_ = start;
+  redoCount_ += len;
+  cursorPos_ = std::min(minPos, document_.length());
+}
+
+void EditorActivity::redoLastChange() {
+  commitComposition();
+  romajiKana_.clear();
+  closeChange();
+  if (redoCount_ == 0) {
+    LOG_DBG("EDTR", "Nothing to redo");
+    return;
+  }
+  const uint16_t start = MAX_UNDO_OPS - redoCount_;
+  uint16_t end = start + 1;
+  while (end < MAX_UNDO_OPS && !(undoOps_[end].fileOff & UNDO_GROUP_START)) ++end;
+  const uint16_t len = end - start;
+  const uint32_t minPos = revertBlock(start, end);
+  if (minPos == UINT32_MAX) {
+    LOG_ERR("EDTR", "Redo failed (SD I/O); history cleared");
+    resetUndo();
+    return;
+  }
+  memmove(undoOps_ + undoCount_, undoOps_ + start, len * sizeof(UndoOp));
+  undoCount_ += len;
+  redoCount_ -= len;
+  cursorPos_ = std::min(minPos, document_.length());
 }
 
 void EditorActivity::onBleKey(const HidKeyEvent& ev) {
@@ -352,6 +546,12 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
     if (ev.usage == HID_S) {
       commitComposition();  // save what is on screen, not a half-typed reading
       doSave();
+    } else if (ev.usage == HID_Z_KEY) {
+      undoLastChange();
+      afterKey(true, true, false);
+    } else if (ev.usage == HID_Y || (ev.usage == HID_R && viEnabled_ && viMode_ == ViMode::Normal)) {
+      redoLastChange();
+      afterKey(true, true, false);
     } else if (viEnabled_ && viMode_ == ViMode::Normal) {
       // vi scrolling: Ctrl-F/B a screen, Ctrl-D/U half a screen.
       int rows = 0;
@@ -404,7 +604,10 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
       // In a composition, Enter confirms it (like any IME); otherwise newline.
       const bool confirming = compose_ != ComposeState::None || romajiKana_.hasPending();
       commitComposition();
-      if (!confirming || inputMode_ != InputMode::Hiragana) insertText("\n");
+      if (!confirming || inputMode_ != InputMode::Hiragana) {
+        insertText("\n");
+        closeChange();  // each line is its own undo step
+      }
       contentChanged = true;
       break;
     }
@@ -414,7 +617,7 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
       if (compose_ == ComposeState::Converting) {
         revertConversion();
       } else if (compose_ == ComposeState::Composing) {
-        document_.deleteAt(compStart_, cursorPos_ - compStart_);
+        editDelete(compStart_, cursorPos_ - compStart_);
         cursorPos_ = compStart_;
         compose_ = ComposeState::None;
       }
@@ -439,7 +642,7 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
         romajiKana_.clear();
       } else if (cursorPos_ > 0) {
         const uint32_t len = prevCodepointLen(cursorPos_);
-        document_.deleteAt(cursorPos_ - len, len);
+        editDelete(cursorPos_ - len, len);
         cursorPos_ -= len;
         if (compose_ == ComposeState::Composing && cursorPos_ <= compStart_) compose_ = ComposeState::None;
         contentChanged = true;
@@ -450,55 +653,63 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
       commitComposition();
       if (cursorPos_ < document_.length()) {
         const uint32_t len = nextCodepointLen(cursorPos_);
-        document_.deleteAt(cursorPos_, len);
+        editDelete(cursorPos_, len);
         contentChanged = true;
       }
       break;
 
     case HID_LEFT:
       commitComposition();
+      closeChange();
       if (cursorPos_ > 0) cursorPos_ -= prevCodepointLen(cursorPos_);
       cursorMoved = true;
       break;
 
     case HID_RIGHT:
       commitComposition();
+      closeChange();
       if (cursorPos_ < document_.length()) cursorPos_ += nextCodepointLen(cursorPos_);
       cursorMoved = true;
       break;
 
     case HID_UP:
       commitComposition();
+      closeChange();
       moveCursorVertically(-1);
       cursorMoved = true;
       break;
 
     case HID_DOWN:
       commitComposition();
+      closeChange();
       moveCursorVertically(1);
       cursorMoved = true;
       break;
 
     case HID_PAGE_UP:
       commitComposition();
+      closeChange();
       moveCursorVertically(-static_cast<int>(maxRows_));
       cursorMoved = true;
       break;
 
     case HID_PAGE_DOWN:
       commitComposition();
+      closeChange();
       moveCursorVertically(static_cast<int>(maxRows_));
       cursorMoved = true;
       break;
 
     case HID_HOME:
       commitComposition();
+      closeChange();
       moveCursorToRowEdge(/*toStart=*/true);
       cursorMoved = true;
       break;
 
     case HID_END:
       commitComposition();
+      closeChange();
       moveCursorToRowEdge(/*toStart=*/false);
       cursorMoved = true;
       break;
@@ -683,7 +894,7 @@ uint32_t EditorActivity::insertYankAt(uint32_t at, uint32_t count) {
     if (got <= 0) break;
     // Chunks may split a UTF-8 sequence; the piece table stores bytes, and the
     // pieces end up adjacent, so the text is whole again once all are in.
-    if (!document_.insertAt(at + inserted, std::string_view(buf, static_cast<size_t>(got)))) {
+    if (!editInsert(at + inserted, std::string_view(buf, static_cast<size_t>(got)))) {
       LOG_ERR("EDTR", "Put: insert failed at %u", at + inserted);
       break;
     }
@@ -703,7 +914,7 @@ void EditorActivity::viDeleteLines(uint32_t count) {
   }
   // Deleting the last line: take the '\n' before it instead of after.
   if (end == len && start > 0 && (end == start || byteAt(end - 1) != '\n')) --start;
-  document_.deleteAt(start, end - start);
+  editDelete(start, end - start);
   cursorPos_ = lineStartOf(std::min(start, document_.length()));
 }
 
@@ -716,7 +927,7 @@ void EditorActivity::viPut(bool below) {
       ++at;
     } else {
       // Last line has no '\n': add one, then the register minus its own.
-      if (!document_.insertAt(at, "\n")) return;
+      if (!editInsert(at, "\n")) return;
       ++at;
       insertYankAt(at, viYankLen_ - 1);
       cursorPos_ = at;
@@ -734,6 +945,7 @@ void EditorActivity::enterViNormal() {
   viPending_ = 0;
   viCount_ = 0;
   viEscCount_ = 1;  // the Esc that got us here
+  closeChange();    // the Insert session was one change
   // As in vi, leaving Insert steps back onto the last typed character.
   if (cursorPos_ > lineStartOf(cursorPos_)) cursorPos_ -= prevCodepointLen(cursorPos_);
 }
@@ -792,8 +1004,14 @@ bool EditorActivity::handleViNormalKey(const HidKeyEvent& ev, bool& contentChang
   }
   const uint32_t count = viCount_ ? viCount_ : 1;
   viCount_ = 0;
-  const uint32_t len = document_.length();
   cursorMoved = true;  // mode/cursor changes all repaint
+  closeChange();       // each Normal command (or Insert session it starts) is one change
+  if (ch == 'u') {
+    undoLastChange();
+    contentChanged = true;
+    return true;
+  }
+  const uint32_t len = document_.length();
 
   if (pending == 'd') {
     if (ch == 'd') {
@@ -878,7 +1096,7 @@ bool EditorActivity::handleViNormalKey(const HidKeyEvent& ev, bool& contentChang
       break;
     case 'x':
       for (uint32_t i = 0; i < count && cursorPos_ < document_.length() && byteAt(cursorPos_) != '\n'; ++i) {
-        document_.deleteAt(cursorPos_, nextCodepointLen(cursorPos_));
+        editDelete(cursorPos_, nextCodepointLen(cursorPos_));
         contentChanged = true;
       }
       clampToLine();
@@ -886,7 +1104,7 @@ bool EditorActivity::handleViNormalKey(const HidKeyEvent& ev, bool& contentChang
     case 'D': {
       const uint32_t e = lineEndOf(cursorPos_);
       if (e > cursorPos_) {
-        document_.deleteAt(cursorPos_, e - cursorPos_);
+        editDelete(cursorPos_, e - cursorPos_);
         contentChanged = true;
       }
       clampToLine();
@@ -1487,6 +1705,7 @@ void EditorActivity::switchToDocument(const std::string& newPath) {
   cursorPos_ = 0;
   viewportStart_ = 0;
   goalCol_ = 0;
+  resetUndo();
   romajiKana_.clear();
   compose_ = ComposeState::None;
   candidates_.clear();
