@@ -46,9 +46,16 @@ constexpr uint8_t HID_LEFT = 0x50;
 constexpr uint8_t HID_DOWN = 0x51;
 constexpr uint8_t HID_UP = 0x52;
 
+constexpr uint8_t HID_A = 0x04;
+constexpr uint8_t HID_S = 0x16;
+constexpr uint8_t HID_Z = 0x1D;
+
+constexpr uint8_t MOD_LCTRL = 0x01;
 constexpr uint8_t MOD_LSHIFT = 0x02;
+constexpr uint8_t MOD_RCTRL = 0x10;
 constexpr uint8_t MOD_RSHIFT = 0x20;
 bool hasShift(uint8_t mods) { return (mods & (MOD_LSHIFT | MOD_RSHIFT)) != 0; }
+bool hasCtrl(uint8_t mods) { return (mods & (MOD_LCTRL | MOD_RCTRL)) != 0; }
 
 struct AsciiPair {
   char plain;
@@ -321,6 +328,16 @@ void EditorActivity::onBleKey(const HidKeyEvent& ev) {
   bool cursorMoved = false;
   const bool isVertical =
       (ev.usage == HID_UP || ev.usage == HID_DOWN || ev.usage == HID_PAGE_UP || ev.usage == HID_PAGE_DOWN);
+
+  // Ctrl shortcuts. Unbound Ctrl+letter combos are swallowed rather than
+  // typed as the bare letter.
+  if (hasCtrl(ev.mods) && ev.usage >= HID_A && ev.usage <= HID_Z) {
+    if (ev.usage == HID_S) {
+      commitComposition();  // save what is on screen, not a half-typed reading
+      doSave();
+    }
+    return;
+  }
 
   switch (ev.usage) {
     case HID_TAB:
