@@ -22,7 +22,8 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.0).
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.1:
+  1.4.0 plus the MS-IME romaji spellings thi/li/twu/..., 2026-09-28).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
