@@ -39,10 +39,10 @@ TEST(RomajiKana, YouonPalatalizedForms) {
 
 TEST(RomajiKana, DeadEndPrefixFlushesLeadingCharLiterally) {
   RomajiKana rk;
-  // "j" is a valid prefix (ja/ju/jo/je) but "jy" is not a prefix of anything
-  // -> "j" flushes literally, "y" carries over as the new pending prefix,
-  // then completes "ya" -> や.
-  EXPECT_EQ(feedAll(rk, "jya"), "jや");
+  // "v" is a valid prefix (va/vi/vu/ve/vo) but "vy" is not a prefix of
+  // anything -> "v" flushes literally, "y" carries over as the new pending
+  // prefix, then completes "ya" -> や. (Was "jya" until jya became a rule.)
+  EXPECT_EQ(feedAll(rk, "vya"), "vや");
 }
 
 TEST(RomajiKana, AlternateSpellingsConverge) {
@@ -107,8 +107,9 @@ TEST(RomajiKana, FlushPendingIncompletePrefixIsLiteral) {
 
 TEST(RomajiKana, UnrecognizedLeadingCharFlushesLiterally) {
   RomajiKana rk;
-  // "q" starts no rule at all.
-  EXPECT_EQ(rk.feed('q'), "q");
+  // Every letter now starts some rule (q became kwa-style), so use a
+  // character that starts none.
+  EXPECT_EQ(rk.feed('@'), "@");
   EXPECT_FALSE(rk.hasPending());
 }
 
@@ -133,4 +134,48 @@ TEST(RomajiKana, ClearResetsPendingState) {
   // "k" was discarded, not carried over — 'a' alone completes the vowel
   // mora, not "ka".
   EXPECT_EQ(rk.feed('a'), "あ");
+}
+
+TEST(RomajiKana, MsImeForeignSoundSpellings) {
+  RomajiKana rk;
+  EXPECT_EQ(feedAll(rk, "thi"), "てぃ");
+  EXPECT_EQ(feedAll(rk, "dhi"), "でぃ");
+  EXPECT_EQ(feedAll(rk, "dhu"), "でゅ");
+  EXPECT_EQ(feedAll(rk, "twu"), "とぅ");
+  EXPECT_EQ(feedAll(rk, "dwu"), "どぅ");
+  EXPECT_EQ(feedAll(rk, "whi"), "うぃ");
+  EXPECT_EQ(feedAll(rk, "kwa"), "くぁ");
+  EXPECT_EQ(feedAll(rk, "qo"), "くぉ");
+  EXPECT_EQ(feedAll(rk, "ye"), "いぇ");
+  EXPECT_EQ(feedAll(rk, "jya"), "じゃ");
+  EXPECT_EQ(feedAll(rk, "paathii"), "ぱあてぃい");
+}
+
+TEST(RomajiKana, LPrefixSmallKana) {
+  RomajiKana rk;
+  EXPECT_EQ(feedAll(rk, "li"), "ぃ");
+  EXPECT_EQ(feedAll(rk, "la"), "ぁ");
+  EXPECT_EQ(feedAll(rk, "lyu"), "ゅ");
+  EXPECT_EQ(feedAll(rk, "ltu"), "っ");
+  EXPECT_EQ(feedAll(rk, "ltsu"), "っ");
+  EXPECT_EQ(feedAll(rk, "lka"), "ゕ");
+  EXPECT_EQ(feedAll(rk, "teli"), "てぃ");
+}
+
+TEST(RomajiKana, NewPrefixesDoNotBreakSokuonOrExisting) {
+  RomajiKana rk;
+  EXPECT_EQ(feedAll(rk, "motto"), "もっと");
+  EXPECT_EQ(feedAll(rk, "matthi"), "まってぃ");
+  EXPECT_EQ(feedAll(rk, "wa"), "わ");
+  EXPECT_EQ(feedAll(rk, "wi"), "うぃ");
+  EXPECT_EQ(feedAll(rk, "chi"), "ち");
+  EXPECT_EQ(feedAll(rk, "tsu"), "つ");
+}
+
+TEST(RomajiKana, KatakanaForNewSpellings) {
+  RomajiKana rk;
+  rk.setMode(RomajiKana::Mode::Katakana);
+  EXPECT_EQ(feedAll(rk, "thi"), "ティ");
+  EXPECT_EQ(feedAll(rk, "li"), "ィ");
+  EXPECT_EQ(feedAll(rk, "twu"), "トゥ");
 }

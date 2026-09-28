@@ -11,12 +11,12 @@ struct RomajiRule {
   const char* katakana;
 };
 
-// Flash-resident rule table (~150 entries): standard gojuon, dakuten/handakuten
+// Flash-resident rule table (~230 entries): standard gojuon, dakuten/handakuten
 // rows, youon (palatalized) forms, small-form (x-prefix) kana, common loanword
-// extensions (fa/va/she/je/tsa-family), and the long-vowel mark. Deliberately
-// omits the rarer th-/tw-/dh-/dw-prefixed foreign-sound families (te/to/de/do
-// small-vowel combos) to keep the v1 table small and unambiguous; "ti"/"tu"
-// resolve to chi/tsu here, matching the most common convention.
+// extensions (fa/va/she/je/tsa-family), and the long-vowel mark. Also the
+// MS-IME spellings people type from habit: l-prefixed small kana (li, ltu),
+// th/dh (thi = てぃ), tw/dw (twu = とぅ), wh, kw/q/gw, ye, jya/cya/dya. "ti"/"tu"
+// still resolve to chi/tsu, matching the most common convention.
 static constexpr RomajiRule kRules[] = {
     // Vowels
     {"a", "あ", "ア"},
@@ -200,6 +200,93 @@ static constexpr RomajiRule kRules[] = {
     {"xtsu", "っ", "ッ"},
     {"xtu", "っ", "ッ"},
     {"xwa", "ゎ", "ヮ"},
+    // small kana, l-prefix (MS-IME)
+    {"la", "ぁ", "ァ"},
+    {"li", "ぃ", "ィ"},
+    {"lu", "ぅ", "ゥ"},
+    {"le", "ぇ", "ェ"},
+    {"lo", "ぉ", "ォ"},
+    {"lya", "ゃ", "ャ"},
+    {"lyu", "ゅ", "ュ"},
+    {"lyo", "ょ", "ョ"},
+    {"ltu", "っ", "ッ"},
+    {"ltsu", "っ", "ッ"},
+    {"lwa", "ゎ", "ヮ"},
+    {"lka", "ゕ", "ヵ"},
+    {"lke", "ゖ", "ヶ"},
+    {"xka", "ゕ", "ヵ"},
+    {"xke", "ゖ", "ヶ"},
+    // th / dh: te/de + small vowel
+    {"tha", "てゃ", "テャ"},
+    {"thi", "てぃ", "ティ"},
+    {"thu", "てゅ", "テュ"},
+    {"the", "てぇ", "テェ"},
+    {"tho", "てょ", "テョ"},
+    {"dha", "でゃ", "デャ"},
+    {"dhi", "でぃ", "ディ"},
+    {"dhu", "でゅ", "デュ"},
+    {"dhe", "でぇ", "デェ"},
+    {"dho", "でょ", "デョ"},
+    // tw / dw: to/do + small vowel
+    {"twa", "とぁ", "トァ"},
+    {"twi", "とぃ", "トィ"},
+    {"twu", "とぅ", "トゥ"},
+    {"twe", "とぇ", "トェ"},
+    {"two", "とぉ", "トォ"},
+    {"dwa", "どぁ", "ドァ"},
+    {"dwi", "どぃ", "ドィ"},
+    {"dwu", "どぅ", "ドゥ"},
+    {"dwe", "どぇ", "ドェ"},
+    {"dwo", "どぉ", "ドォ"},
+    // wh: u + small vowel
+    {"wha", "うぁ", "ウァ"},
+    {"whi", "うぃ", "ウィ"},
+    {"whu", "う", "ウ"},
+    {"whe", "うぇ", "ウェ"},
+    {"who", "うぉ", "ウォ"},
+    // kw / q / gw
+    {"kwa", "くぁ", "クァ"},
+    {"kwi", "くぃ", "クィ"},
+    {"kwu", "くぅ", "クゥ"},
+    {"kwe", "くぇ", "クェ"},
+    {"kwo", "くぉ", "クォ"},
+    {"qa", "くぁ", "クァ"},
+    {"qi", "くぃ", "クィ"},
+    {"qu", "く", "ク"},
+    {"qe", "くぇ", "クェ"},
+    {"qo", "くぉ", "クォ"},
+    {"gwa", "ぐぁ", "グァ"},
+    {"gwi", "ぐぃ", "グィ"},
+    {"gwu", "ぐぅ", "グゥ"},
+    {"gwe", "ぐぇ", "グェ"},
+    {"gwo", "ぐぉ", "グォ"},
+    // other common spellings
+    {"ye", "いぇ", "イェ"},
+    {"jya", "じゃ", "ジャ"},
+    {"jyu", "じゅ", "ジュ"},
+    {"jye", "じぇ", "ジェ"},
+    {"jyo", "じょ", "ジョ"},
+    {"cya", "ちゃ", "チャ"},
+    {"cyu", "ちゅ", "チュ"},
+    {"cye", "ちぇ", "チェ"},
+    {"cyo", "ちょ", "チョ"},
+    {"dya", "ぢゃ", "ヂャ"},
+    {"dyu", "ぢゅ", "ヂュ"},
+    {"dye", "ぢぇ", "ヂェ"},
+    {"dyo", "ぢょ", "ヂョ"},
+    {"fya", "ふゃ", "フャ"},
+    {"fyo", "ふょ", "フョ"},
+    {"kye", "きぇ", "キェ"},
+    {"gye", "ぎぇ", "ギェ"},
+    {"nye", "にぇ", "ニェ"},
+    {"hye", "ひぇ", "ヒェ"},
+    {"mye", "みぇ", "ミェ"},
+    {"rye", "りぇ", "リェ"},
+    {"bye", "びぇ", "ビェ"},
+    {"pye", "ぴぇ", "ピェ"},
+    {"sye", "しぇ", "シェ"},
+    {"zye", "じぇ", "ジェ"},
+    {"tye", "ちぇ", "チェ"},
 
     // Long vowel mark
     {"-", "ー", "ー"},
