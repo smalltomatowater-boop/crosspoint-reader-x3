@@ -22,8 +22,8 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.1:
-  1.4.0 plus the MS-IME romaji spellings thi/li/twu/..., 2026-09-28).
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.2; 1.4.1
+  added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -99,6 +99,22 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    copy's 2KB buffer lives in a separate noinline `copyFile()`.
    Also seen: the home screen's XTC thumbnail allocation (104,544 bytes) can
    fail; that's pre-existing and unrelated.
+   **Image viewer speed-up (2026-09-29, owner-verified, released as 1.4.2)**:
+   PNG/JPEG are decoded once. `PngToFramebufferConverter` now streams
+   caches over 48KB to the SD card in 16-row bands (`PixelCache::beginStream`
+   / `streamRow` / `finishStream`, written to `.tmp` and then renamed), where
+   before it skipped caching them. The viewer draws the LSB/MSB planes and
+   the BW redraw from `/.crosspoint/imgcache/<hash>.pxc` via the shared
+   `renderPixelCache()` (`lib/Epub/Epub/converters/PixelCacheRenderer`,
+   also used by `ImageBlock` now). The BW preview is always `FAST_REFRESH`:
+   on the X3, HAL turns `HALF_REFRESH` into FULL plus a settle pass (~2.5s),
+   and the owner's refresh-frequency setting is "every page". The progress-bar
+   refresh is skipped for PNG/JPEG. The cache is cleared on deep sleep
+   (`main.cpp enterDeepSleep` → `BmpViewerActivity::clearImageCache`) and by
+   Clear Cache. First open of a 400x800 PNG went from ~6.6s to ~4.3s (decode
+   ~1.45s is now the largest part: PNG inflate, CPU-bound); a re-open skips the
+   decode. Side effect: big PNGs inside EPUBs are now cached too, so a page's
+   3 render passes decode once instead of three times.
    **Heap fragmentation after the editor (fixed 2026-09-25)**: the XTC
    reader showed メモリエラー after the editor had been used. Its 52,272-byte
    page buffer (792/8 × 528) needs one contiguous block, and the largest
