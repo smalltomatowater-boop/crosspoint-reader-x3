@@ -4,13 +4,10 @@
 #include <Logging.h>
 #include <Serialization.h>
 
-#include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PixelCacheRenderer.h"
 
-// Cache file format:
-// - uint16_t width
-// - uint16_t height
-// - uint8_t pixels[...] - 2 bits per pixel, packed (4 pixels per byte), row-major order
+// Cache file format: see PixelCacheRenderer.cpp.
 
 ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t height)
     : imagePath(imagePath), width(width), height(height) {}
@@ -26,67 +23,6 @@ std::string getCachePath(const std::string& imagePath) {
     return imagePath.substr(0, dotPos) + ".pxc";
   }
   return imagePath + ".pxc";
-}
-
-bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
-                     int expectedHeight) {
-  HalFile cacheFile;
-  if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
-    return false;
-  }
-
-  uint16_t cachedWidth, cachedHeight;
-  if (cacheFile.read(&cachedWidth, 2) != 2 || cacheFile.read(&cachedHeight, 2) != 2) {
-    return false;
-  }
-
-  // Verify dimensions are close (allow 1 pixel tolerance for rounding differences)
-  int widthDiff = abs(cachedWidth - expectedWidth);
-  int heightDiff = abs(cachedHeight - expectedHeight);
-  if (widthDiff > 1 || heightDiff > 1) {
-    LOG_ERR("IMG", "Cache dimension mismatch: %dx%d vs %dx%d", cachedWidth, cachedHeight, expectedWidth,
-            expectedHeight);
-    return false;
-  }
-
-  // Use cached dimensions for rendering (they're the actual decoded size)
-  expectedWidth = cachedWidth;
-  expectedHeight = cachedHeight;
-
-  LOG_DBG("IMG", "Loading from cache: %s (%dx%d)", cachePath.c_str(), cachedWidth, cachedHeight);
-
-  // Read and render row by row to minimize memory usage
-  const int bytesPerRow = (cachedWidth + 3) / 4;  // 2 bits per pixel, 4 pixels per byte
-  uint8_t* rowBuffer = (uint8_t*)malloc(bytesPerRow);
-  if (!rowBuffer) {
-    LOG_ERR("IMG", "Failed to allocate row buffer");
-    return false;
-  }
-
-  DirectPixelWriter pw;
-  pw.init(renderer);
-
-  for (int row = 0; row < cachedHeight; row++) {
-    if (cacheFile.read(rowBuffer, bytesPerRow) != bytesPerRow) {
-      LOG_ERR("IMG", "Cache read error at row %d", row);
-      free(rowBuffer);
-      return false;
-    }
-
-    const int destY = y + row;
-    pw.beginRow(destY);
-    for (int col = 0; col < cachedWidth; col++) {
-      const int byteIdx = col >> 2;            // col / 4
-      const int bitShift = 6 - (col & 3) * 2;  // MSB first within byte
-      uint8_t pixelValue = (rowBuffer[byteIdx] >> bitShift) & 0x03;
-
-      pw.writePixel(x + col, pixelValue);
-    }
-  }
-
-  free(rowBuffer);
-  LOG_DBG("IMG", "Cache render complete");
-  return true;
 }
 
 }  // namespace
@@ -106,7 +42,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   // Try to render from cache first
   std::string cachePath = getCachePath(imagePath);
-  if (renderFromCache(renderer, cachePath, x, y, width, height)) {
+  if (renderPixelCache(renderer, cachePath, x, y, width, height)) {
     return;  // Successfully rendered from cache
   }
 

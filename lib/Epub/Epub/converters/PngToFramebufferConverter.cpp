@@ -204,7 +204,11 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   DirectCacheWriter cw;
   if (caching) {
     cw.init(ctx->cache.buffer, ctx->cache.bytesPerRow, ctx->cache.originX);
-    cw.beginRow(outY, ctx->config->y);
+    if (ctx->cache.streaming) {
+      cw.setRow(ctx->cache.streamRow(outY));
+    } else {
+      cw.beginRow(outY, ctx->config->y);
+    }
   }
 
   int srcX = 0;
@@ -349,16 +353,20 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   }
 
   // Allocate cache buffer using SCALED dimensions.
-  // PNG decode is fast enough (~135ms for 400x600) that caching provides minimal benefit
-  // for larger images, while the cache buffer competes with the 44KB PNG decoder for heap.
-  // Skip caching when the buffer would exceed the framebuffer size (48KB).
+  // Up to 48KB the cache is held in RAM and written at the end. Larger
+  // caches would compete with the 44KB PNG decoder for heap, so they are
+  // streamed to the SD card a row at a time instead (PixelCache::beginStream).
+  // A full-screen PNG takes ~1.1s to decode on the X3, and a grayscale render
+  // needs it three or four times, so the cache pays off.
   static constexpr size_t PNG_MAX_CACHE_BYTES = 48000;
   ctx.caching = !config.cachePath.empty();
   if (ctx.caching) {
     size_t cacheSize = (size_t)((ctx.dstWidth + 3) / 4) * ctx.dstHeight;
     if (cacheSize > PNG_MAX_CACHE_BYTES) {
-      LOG_DBG("PNG", "Skipping cache: %zu bytes exceeds PNG limit (%zu)", cacheSize, PNG_MAX_CACHE_BYTES);
-      ctx.caching = false;
+      if (!ctx.cache.beginStream(ctx.dstWidth, ctx.dstHeight, config.x, config.y, config.cachePath)) {
+        LOG_DBG("PNG", "Skipping cache: %zu bytes, stream open failed", cacheSize);
+        ctx.caching = false;
+      }
     } else if (!ctx.cache.allocate(ctx.dstWidth, ctx.dstHeight, config.x, config.y)) {
       LOG_ERR("PNG", "Failed to allocate cache buffer, continuing without caching");
       ctx.caching = false;
@@ -381,7 +389,11 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 
   // Write cache file if caching was enabled and buffer was allocated
   if (ctx.caching) {
-    ctx.cache.writeToFile(config.cachePath);
+    if (ctx.cache.streaming) {
+      ctx.cache.finishStream();
+    } else {
+      ctx.cache.writeToFile(config.cachePath);
+    }
   }
 
   return true;

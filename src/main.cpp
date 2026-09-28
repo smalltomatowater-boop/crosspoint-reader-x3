@@ -32,6 +32,7 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
+#include "activities/util/BmpViewerActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
@@ -307,6 +308,11 @@ void enterDeepSleep(bool fromTimeout = false) {
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
   deepSleepInProgress = true;
   activityManager.goToSleep(fromTimeout);
+
+  // The image viewer's pixel caches only speed up re-opening an image within
+  // a session; drop them so they don't pile up on the SD card. (The viewer,
+  // if it was open, has been exited by goToSleep above.)
+  BmpViewerActivity::clearImageCache();
 
   if (isQuickResumeSleep) {
     saveSleepFrameBuffer();

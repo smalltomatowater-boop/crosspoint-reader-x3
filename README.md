@@ -49,6 +49,7 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 ### 画像ビューア (PNG / JPEG)
 - ファイル一覧で `.png` / `.jpg` / `.jpeg` を開けます(BMPと同じビューア。左右ボタンで同じフォルダの前後の画像へ、グレー表示あり)
 - 「スリープ画面に設定」でPNG/JPEGも壁紙にできます(スリープ画面用に `/sleep.bmp` へ1枚だけ変換)
+- 展開は1回だけで、結果を `/.crosspoint/imgcache/` にキャッシュしてグレー表示に使います(同じ画像を開き直すと展開しない)。キャッシュはスリープに入るときに自動で消えます
 
 ### バグ修正
 - `EpdFont::getGlyph()` — stubモードでCJKグリフ参照時にnullポインタを踏むバグを修正

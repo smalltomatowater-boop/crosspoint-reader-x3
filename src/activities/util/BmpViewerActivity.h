@@ -18,6 +18,11 @@ class BmpViewerActivity final : public Activity {
   void onExit() override;
   void loop() override;
 
+  // Decoded PNG/JPEG pixel caches (~78KB per full-screen image). Deleted when
+  // the device goes to sleep (main.cpp enterDeepSleep) and by Clear Cache.
+  static constexpr const char* IMAGE_CACHE_DIR = "/.crosspoint/imgcache";
+  static void clearImageCache();
+
  private:
   void loadSiblingImages();
   void doSetSleepCover();

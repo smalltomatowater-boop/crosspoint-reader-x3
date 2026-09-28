@@ -164,6 +164,9 @@ struct DirectCacheWriter {
   // Call once per row before the column loop.
   inline void beginRow(int screenY, int cacheOriginY) { rowPtr = buffer + (screenY - cacheOriginY) * bytesPerRow; }
 
+  // Streaming caches hand out their single row buffer instead (PixelCache::streamRow).
+  inline void setRow(uint8_t* row) { rowPtr = row; }
+
   // Write a 2-bit pixel value. No bounds checking.
   inline void writePixel(int screenX, uint8_t value) const {
     const int localX = screenX - originX;

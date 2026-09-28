@@ -17,7 +17,8 @@ bool isBookCacheDirectoryName(const char* name) {
 
   return strncmp(name, EPUB_PREFIX, std::size(EPUB_PREFIX) - 1) == 0 ||
          strncmp(name, TXT_PREFIX, std::size(TXT_PREFIX) - 1) == 0 ||
-         strncmp(name, XTC_PREFIX, std::size(XTC_PREFIX) - 1) == 0;
+         strncmp(name, XTC_PREFIX, std::size(XTC_PREFIX) - 1) == 0 ||
+         strcmp(name, "imgcache") == 0;  // image viewer pixel caches (BmpViewerActivity::IMAGE_CACHE_DIR)
 }
 
 void clearBookCache(const std::string& path) {

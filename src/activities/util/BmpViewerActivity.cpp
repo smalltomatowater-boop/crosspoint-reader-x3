@@ -13,8 +13,27 @@
 
 #include "CrossPointSettings.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PixelCacheRenderer.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+constexpr const char* IMAGE_CACHE_DIR = BmpViewerActivity::IMAGE_CACHE_DIR;
+
+// One cache file per image, size and screen: a changed file (new size) or a
+// different orientation (different fit) gets a fresh decode.
+std::string imageCachePath(const std::string& imagePath, int screenW, int screenH) {
+  size_t fileSize = 0;
+  HalFile f;
+  if (Storage.openFileForRead("IMGV", imagePath, f)) fileSize = f.fileSize();
+  char key[32];
+  snprintf(key, sizeof(key), ":%u:%dx%d", static_cast<unsigned>(fileSize), screenW, screenH);
+  char path[64];
+  snprintf(path, sizeof(path), "%s/%08x.pxc", IMAGE_CACHE_DIR,
+           static_cast<unsigned>(std::hash<std::string>{}(imagePath + key)));
+  return path;
+}
+}  // namespace
 
 BmpViewerActivity::BmpViewerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string path)
     : Activity("BmpViewer", renderer, mappedInput), filePath(std::move(path)) {}
@@ -72,9 +91,10 @@ void BmpViewerActivity::onEnter() {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
 
   if (!FsHelpers::hasBmpExtension(filePath)) {
+    // PNG/JPEG: no progress bar; each popup update is a ~0.6s refresh and the
+    // BW preview follows within ~1.5s.
     const bool hasPrevious = (siblingImages.size() > 1 && currentImageIndex > 0);
     const bool hasNext = (siblingImages.size() > 1 && currentImageIndex != -1 &&
                           currentImageIndex < static_cast<int>(siblingImages.size()) - 1);
@@ -89,6 +109,7 @@ void BmpViewerActivity::onEnter() {
     }
     return;
   }
+  GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
   // 1. Open the file
   if (Storage.openFileForRead("BMP", filePath, file)) {
     Bitmap bitmap(file, true);
@@ -180,38 +201,78 @@ bool BmpViewerActivity::renderDecodedImage(const char* btn1, const char* btn2, c
   config.useGrayscale = true;
   config.useDithering = true;
 
+  // Decode once; the decoder also writes a 2-bit pixel cache (streamed to
+  // the SD card for large PNGs), and the grayscale planes and the final BW
+  // frame are drawn from that. Opening the image again skips the decode.
+  const std::string cachePath = imageCachePath(filePath, pageWidth, pageHeight);
+  int cacheW = 0, cacheH = 0;
+  bool cached = readPixelCacheSize(cachePath, cacheW, cacheH);
+  int x = config.x, y = config.y;
+
   renderer.clearScreen();
-  if (!decoder->decodeToFramebuffer(filePath, renderer, config)) {
-    LOG_ERR("IMGV", "%s decode failed: %s", decoder->getFormatName(), filePath.c_str());
-    return false;
+  if (cached) {
+    x = (pageWidth - cacheW) / 2;
+    y = (pageHeight - cacheH) / 2;
+    cached = renderPixelCache(renderer, cachePath, x, y);
+  }
+  if (!cached) {
+    Storage.mkdir(IMAGE_CACHE_DIR);
+    config.cachePath = cachePath;
+    renderer.clearScreen();
+    if (!decoder->decodeToFramebuffer(filePath, renderer, config)) {
+      LOG_ERR("IMGV", "%s decode failed: %s", decoder->getFormatName(), filePath.c_str());
+      return false;
+    }
+    cached = readPixelCacheSize(cachePath, cacheW, cacheH);
+    if (!cached) LOG_INF("IMGV", "No pixel cache; grayscale will re-decode");
   }
   GUI.drawButtonHints(renderer, btn1, btn2, btn3, btn4);
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  // Always FAST for the BW preview: the grayscale pass right after redraws
+  // the whole image, and the X3 driver forces a full sync on the first
+  // refresh after any grayscale frame anyway. On the X3 a HALF_REFRESH
+  // becomes FULL plus a settle pass (HalDisplay::displayBuffer), ~2.5s.
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
-  // Grayscale: decode into the LSB and MSB planes and show them, then decode
-  // the BW frame once more and re-sync the controller with it for the next
-  // differential refresh. Re-decoding (~1.2s for a screen-sized PNG) instead
-  // of stashing the BW frame saves 52KB, which the decoder needs itself.
+  // One pass in the current render mode, from the cache or (no cache) by
+  // decoding again.
+  config.cachePath.clear();
+  auto drawPass = [&]() {
+    if (cached) return renderPixelCache(renderer, cachePath, x, y);
+    return decoder->decodeToFramebuffer(filePath, renderer, config);
+  };
+
+  // Grayscale: draw the LSB and MSB planes and show them, then redraw the BW
+  // frame and re-sync the controller with it for the next differential
+  // refresh (redrawing instead of stashing the BW frame saves 52KB).
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  const bool lsb = decoder->decodeToFramebuffer(filePath, renderer, config);
+  const bool lsb = drawPass();
   if (lsb) renderer.copyGrayscaleLsbBuffers();
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  const bool msb = lsb && decoder->decodeToFramebuffer(filePath, renderer, config);
+  const bool msb = lsb && drawPass();
   if (msb) {
     renderer.copyGrayscaleMsbBuffers();
     renderer.displayGrayBuffer();
   }
   renderer.setRenderMode(GfxRenderer::BW);
   renderer.clearScreen();
-  if (decoder->decodeToFramebuffer(filePath, renderer, config)) {
+  if (drawPass()) {
     GUI.drawButtonHints(renderer, btn1, btn2, btn3, btn4);
     if (msb) renderer.cleanupGrayscaleWithFrameBuffer();
   } else {
-    LOG_ERR("IMGV", "BW re-decode failed");
+    LOG_ERR("IMGV", "BW redraw failed");
   }
   return true;
+}
+
+void BmpViewerActivity::clearImageCache() {
+  if (!Storage.exists(IMAGE_CACHE_DIR)) return;
+  if (Storage.removeDir(IMAGE_CACHE_DIR)) {
+    LOG_DBG("IMGV", "Image cache cleared");
+  } else {
+    LOG_ERR("IMGV", "Failed to clear %s", IMAGE_CACHE_DIR);
+  }
 }
 
 void BmpViewerActivity::onExit() {
