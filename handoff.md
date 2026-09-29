@@ -22,9 +22,10 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.4; 1.4.1
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.5; 1.4.1
   added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up, 1.4.3
-  the NimBLE memory trim, 1.4.4 7-byte reports + passkey pairing).
+  the NimBLE memory trim, 1.4.4 7-byte reports + passkey pairing,
+  1.4.5 the BLE client leak fix).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -126,7 +127,31 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    p2-via-framebuffer path). The two-plane single allocation (~104KB) still
    isn't possible after BLE use: something else in NimBLE/the controller
    stays allocated. Not yet found.
-2. **Heap — improved 2026-09-29 (1.4.3): ~26KB free with the keyboard
+2. **1.4.5 (2026-09-29): the BLE client leaked on every editor session —
+   fixed.** `deleteClient()` on a connected/DISCONNECTING NimBLEClient only
+   schedules deletion for the disconnect event, and we deinit'ed NimBLE
+   right after, so the client plus its GATT tree stayed in NimBLE's static
+   client table. That fragmented the heap (largest block after the editor
+   was 49KB, so XTC failed; the "unfound leftover" noted on 2026-09-25 was
+   this) and, with 1 connection slot since 1.4.3, broke the second session
+   (`createClient failed`). Cleanup now disconnects and waits for
+   `onDisconnect()` (the `connected_` flag, not `isConnected()`, which goes
+   false at DISCONNECTING) before deleting. Verified: 4 sessions in a row
+   connect, ~25.8KB free each time, largest block back to 114,676 after exit.
+   The Keys-To-Go 2 user's low memory (5.7KB at NimBLE up, 2KB while typing,
+   ~17KB less than ours before BLE) is likely this leak after repeated editor
+   opens. Unconfirmed until they try 1.4.5. Their crash report (decoded with
+   the local gh_release ELF of the same commit) was OOM abort in
+   `SkkDictionary::lookup` <- `buildConversionCandidates` <- `convertStep`.
+   Also in 1.4.5: conversion caps candidates at 32 (+kana, reserved once) and
+   is skipped below 8KB free / 2KB block (top-row notice). XTC gets a
+   streaming fallback (4KB chunks into the framebuffer) when no 52KB block
+   fits; that path has **not run on hardware yet** (not needed after the leak
+   fix). Wi-Fi as a memory hog was a guess; the owner will test it next
+   (open editor → File Transfer/clock sync → editor, compare "NimBLE up").
+   The owner's device once hung silently (no serial output, fixed by an
+   esptool reset); cause unknown. A 30s task watchdog was proposed, not done.
+   **Heap — improved 2026-09-29 (1.4.3): ~26KB free with the keyboard
    connected (was ~18KB).** Stages measured on device: home 109.9KB →
    editor open 98.5KB → editor ready 78-79KB → NimBLE up 21.6KB (now 30.0KB) →
    ready 17.9KB (now 26.3KB). NimBLEDevice::init() is the bulk (56.7KB, now
