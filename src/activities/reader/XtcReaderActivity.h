@@ -30,6 +30,13 @@ class XtcReaderActivity final : public Activity {
   void renderPage();
   void renderPageXtg(uint16_t pageWidth, uint16_t pageHeight);
   void renderPageXth(uint16_t pageWidth, uint16_t pageHeight);
+  // Fallbacks for a fragmented heap (no 52KB block, e.g. after BLE was used):
+  // stream the page from the SD card in 4KB chunks straight into the
+  // framebuffer, with no page-sized allocation.
+  enum class XthPass : uint8_t { Bw, Lsb, Msb };
+  bool streamXthPass(size_t planeSize, XthPass pass);
+  void renderPageXthStreamed(size_t planeSize);
+  bool renderPageXtgStreamed(uint16_t pageWidth, uint16_t pageHeight);
   void renderStatusBarOverlay(StatusBarOverlayPosition position) const;
   StatusBarInfo getStatusBarInfo() const;
   void saveProgress() const;

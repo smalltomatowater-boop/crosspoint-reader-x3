@@ -233,6 +233,7 @@ void XtcReaderActivity::renderPage() {
 void XtcReaderActivity::renderPageXtg(uint16_t pageWidth, uint16_t pageHeight) {
   const size_t bufSize = static_cast<size_t>((pageWidth + 7) / 8) * pageHeight;
   auto buf = makeUniqueNoThrow<uint8_t[]>(bufSize);
+  if (!buf && renderPageXtgStreamed(pageWidth, pageHeight)) return;
   if (!buf) {
     LOG_ERR("XTR", "OOM XTG: %u bytes, largest=%u", bufSize, ESP.getMaxAllocHeap());
     renderer.clearScreen();
@@ -267,6 +268,94 @@ void XtcReaderActivity::renderPageXtg(uint16_t pageWidth, uint16_t pageHeight) {
   }
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   LOG_DBG("XTR", "Rendered page %lu/%lu (XTG)", currentPage + 1, xtc->getPageCount());
+}
+
+// ---- Streaming fallbacks -------------------------------------------------
+// An XTH page is plane 1 then plane 2 (planeSize bytes each). Streaming it
+// once and combining into the framebuffer in place gives any of the three
+// planes the fast paths compute, with no page-sized buffer:
+//   BW  = ~(p1 | p2): plane 1 writes p1, plane 2 turns it into ~(fb | p2)
+//   LSB = ~p1 & p2:   plane 1 writes ~p1, plane 2 ANDs p2
+//   MSB = p1 ^ p2:    plane 1 writes p1, plane 2 XORs p2
+// Costs one extra SD read of the page (~104KB) per pass.
+bool XtcReaderActivity::streamXthPass(size_t planeSize, XthPass pass) {
+  uint8_t* fb = renderer.getFrameBuffer();
+  const auto err = xtc->loadPageStreaming(
+      currentPage,
+      [fb, planeSize, pass](const uint8_t* data, size_t size, size_t offset) {
+        for (size_t k = 0; k < size; ++k) {
+          const size_t pos = offset + k;
+          const uint8_t v = data[k];
+          if (pos < planeSize) {
+            fb[pos] = (pass == XthPass::Lsb) ? static_cast<uint8_t>(~v) : v;
+          } else if (pos - planeSize < planeSize) {
+            uint8_t& o = fb[pos - planeSize];
+            o = (pass == XthPass::Bw) ? static_cast<uint8_t>(~(o | v)) : (pass == XthPass::Lsb) ? (o & v) : (o ^ v);
+          }
+        }
+        yield();
+      },
+      4096);
+  return err == xtc::XtcError::OK;
+}
+
+void XtcReaderActivity::renderPageXthStreamed(size_t planeSize) {
+  LOG_INF("XTR", "XTH streamed render (largest block %u)", ESP.getMaxAllocHeap());
+  if (!streamXthPass(planeSize, XthPass::Bw)) {
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+    renderer.displayBuffer();
+    return;
+  }
+  int interval = SETTINGS.getRefreshFrequency();
+  if (interval <= 0 || interval > 100) interval = 10;
+  const bool fullPage = (pagesUntilFullRefresh % interval) == 0;
+  renderer.displayBuffer(fullPage ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+  pagesUntilFullRefresh++;
+
+  const bool gray = streamXthPass(planeSize, XthPass::Lsb);
+  if (gray) renderer.copyGrayscaleLsbBuffers();
+  const bool gray2 = gray && streamXthPass(planeSize, XthPass::Msb);
+  if (gray2) {
+    renderer.copyGrayscaleMsbBuffers();
+    renderer.displayGrayBuffer();
+  }
+  // BW restore for the next differential refresh.
+  if (streamXthPass(planeSize, XthPass::Bw) && gray2) renderer.cleanupGrayscaleWithFrameBuffer();
+  LOG_DBG("XTR", "Rendered page %lu/%lu (XTH streamed)", currentPage + 1, xtc->getPageCount());
+}
+
+// XTG (1-bit, row-major) without the page buffer: draw each streamed chunk
+// with drawPixel, like the buffered path. Returns false if the page can't be read.
+bool XtcReaderActivity::renderPageXtgStreamed(uint16_t pageWidth, uint16_t pageHeight) {
+  LOG_INF("XTR", "XTG streamed render (largest block %u)", ESP.getMaxAllocHeap());
+  renderer.clearScreen();
+  const size_t rowBytes = (pageWidth + 7) / 8;
+  const auto err = xtc->loadPageStreaming(
+      currentPage,
+      [this, rowBytes, pageWidth, pageHeight](const uint8_t* data, size_t size, size_t offset) {
+        for (size_t k = 0; k < size; ++k) {
+          const size_t pos = offset + k;
+          const auto y = static_cast<uint16_t>(pos / rowBytes);
+          if (y >= pageHeight) break;
+          const size_t xByte = pos % rowBytes;
+          for (int bit = 0; bit < 8; ++bit) {
+            const size_t x = xByte * 8 + bit;
+            if (x < pageWidth && !((data[k] >> (7 - bit)) & 1)) renderer.drawPixel(static_cast<int>(x), y, true);
+          }
+        }
+        yield();
+      },
+      4096);
+  if (err != xtc::XtcError::OK) return false;
+  if (SETTINGS.xtcStatusBarMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
+    renderStatusBarOverlay(StatusBarOverlayPosition::Top);
+  } else {
+    renderStatusBarOverlay(StatusBarOverlayPosition::Bottom);
+  }
+  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  LOG_DBG("XTR", "Rendered page %lu/%lu (XTG streamed)", currentPage + 1, xtc->getPageCount());
+  return true;
 }
 
 void XtcReaderActivity::renderPageXth(uint16_t pageWidth, uint16_t pageHeight) {
@@ -365,9 +454,8 @@ void XtcReaderActivity::renderPageXth(uint16_t pageWidth, uint16_t pageHeight) {
     // ---- FALLBACK B: plane1 heap + plane2 via fb (2 SD reads of p2) ----
     // LSB is derived from BW already in fb — no extra SD read needed.
     if (!plane1) {
-      renderer.clearScreen();
-      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
-      renderer.displayBuffer();
+      // ---- FALLBACK C: no plane fits (fragmented heap) → stream ----
+      renderPageXthStreamed(planeSize);
       return;
     }
     auto loadPlane = [&](uint8_t idx, uint8_t* dest) -> bool {
