@@ -63,6 +63,7 @@ class EditorActivity final : public Activity {
   BleHidClient bleHid_;
   bool lastBleConnected_ = false;
   bool lastBleScanning_ = false;
+  bool lastPairing_ = false;
   void onBleKey(const HidKeyEvent& ev);
   // Shared tail of every key: relayout, scroll, goal column, repaint.
   void afterKey(bool contentChanged, bool cursorMoved, bool isVertical);

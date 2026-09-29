@@ -4,6 +4,7 @@
 #include <Logging.h>
 #include <NimBLERemoteCharacteristic.h>
 #include <NimBLERemoteService.h>
+#include <esp_random.h>
 #include <string.h>
 
 // NimbleConfigOverrides.h (force-included) must win over the core's sdkconfig.h;
@@ -38,23 +39,33 @@ void BleHidClient::enqueueKey(uint8_t usage, uint8_t mods) {
 void BleHidClient::notifyCallback(NimBLERemoteCharacteristic* ch, uint8_t* data, size_t len, bool isNotify) {
   (void)ch;
   (void)isNotify;
-  if (!instance_ || !instance_->ready_ || len < 8) return;
+  if (!instance_ || !instance_->ready_ || len < 7) return;
 
-  // Boot keyboard reports are exactly 8 bytes (mods, reserved, keys[6]).
-  // Longer notifications carry a leading report-ID byte — re-parse at
-  // offset 1. TODO(v2): parse the Report Map instead of guessing.
-  const size_t off = (len >= 9) ? 1 : 0;
-  const uint8_t mods = data[off];
+  // Layouts seen so far (TODO: parse the Report Map instead of by length):
+  //   8 bytes  boot keyboard report: mods, reserved, keys[6]
+  //   9+ bytes the same behind a leading report-ID byte
+  //   7 bytes  mods, keys[6] with no reserved byte — Logitech Keys-To-Go 2,
+  //            measured on device by a user: A = "00 04 00 00 00 00 00",
+  //            Shift+A = "02 04 00 00 00 00 00".
+  size_t modsAt = 0;
+  size_t keysAt = 2;
+  if (len == 7) {
+    keysAt = 1;
+  } else if (len >= 9) {
+    modsAt = 1;
+    keysAt = 3;
+  }
+  const uint8_t mods = data[modsAt];
 
   // Press-edge detection: only report keys newly down vs. the previous
   // report, so holding a key does not auto-repeat. lastReportKeys_ is
   // touched only from this (NimBLE) task — no lock needed.
   uint8_t prev[6];
   memcpy(prev, instance_->lastReportKeys_, sizeof(prev));
-  memcpy(instance_->lastReportKeys_, data + off + 2, sizeof(prev));
+  memcpy(instance_->lastReportKeys_, data + keysAt, sizeof(prev));
 
   for (int i = 0; i < 6; i++) {
-    const uint8_t kc = data[off + 2 + i];
+    const uint8_t kc = data[keysAt + i];
     if (kc == 0x00 || kc == 0x01) continue;  // empty / rollover error
     if (memchr(prev, kc, sizeof(prev))) continue;
     instance_->enqueueKey(kc, mods);
@@ -71,8 +82,25 @@ void BleHidClient::onConnect(NimBLEClient* client) {
   LOG_INF("BLEH", "Keyboard connected (free %u, largest %u)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
+uint32_t BleHidClient::onPassKeyDisplay(NimBLEConnInfo& connInfo) {
+  (void)connInfo;
+  // A fresh random code per pairing. NimBLE's default returns its static
+  // security passkey (123456), which anyone nearby could also type.
+  passkey_ = esp_random() % 1000000;
+  passkeyActive_ = true;
+  LOG_INF("BLEH", "Pairing: type %06u on the keyboard, then Enter", static_cast<unsigned>(passkey_));
+  return passkey_;
+}
+
+void BleHidClient::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
+  passkeyActive_ = false;
+  LOG_INF("BLEH", "Security: encrypted=%d authenticated=%d bonded=%d", connInfo.isEncrypted(),
+          connInfo.isAuthenticated(), connInfo.isBonded());
+}
+
 void BleHidClient::onDisconnect(NimBLEClient* client, int reason) {
   (void)client;
+  passkeyActive_ = false;
   ready_ = false;
   connected_ = false;
   memset(lastReportKeys_, 0, sizeof(lastReportKeys_));
@@ -232,7 +260,11 @@ void BleHidClient::bleTaskRun() {
   // when a subscribe hits an insufficient-encryption error
   // (NimBLERemoteValueAttribute.cpp:76-79); bonding keeps the keys in NVS
   // (CONFIG_BT_NIMBLE_NVS_PERSIST) so later reconnects skip pairing.
-  NimBLEDevice::setSecurityAuth(/*bonding=*/true, /*mitm=*/false, /*sc=*/true);
+  // MITM + DISPLAY_ONLY: keyboards that pair by passkey entry (Keys-To-Go 2,
+  // reported by a user) need it; with NimBLE's default NO_INPUT_OUTPUT they
+  // never paired. Keyboards without key entry still get Just Works.
+  NimBLEDevice::setSecurityAuth(/*bonding=*/true, /*mitm=*/true, /*sc=*/true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   bleRunning_ = true;
   LOG_INF("BLEH", "NimBLE up (free %u, largest %u)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 

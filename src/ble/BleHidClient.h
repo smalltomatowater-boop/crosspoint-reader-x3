@@ -40,10 +40,13 @@ struct HidKeyCallback {
 // this component (not the activity) and is always joined in stop() before
 // the owning activity's onExit() returns (TerminalActivity precedent).
 //
-// v1 limitation: no pairing/bonding/encryption. Keyboards that require an
-// encrypted connection will fail the HID report subscribe; that surfaces
-// as isSubscribeFailed() == true rather than a silent retry loop. The v2
-// path is NimBLEDevice::setSecurityAuth + NimBLEClient::secureConnection.
+// Pairing: bonded, MITM, Secure Connections, IO capability DISPLAY_ONLY.
+// Keyboards that pair by passkey entry (e.g. Logitech Keys-To-Go 2) get a
+// random 6-digit code, exposed via pairingPasskey() for the UI to show; the
+// user types it on the keyboard and presses Enter. Keyboards that can't enter
+// a passkey fall back to Just Works. Bonds are kept in NVS, so this happens
+// once per keyboard. A refused HID report subscribe surfaces as
+// isSubscribeFailed() == true rather than a silent retry loop.
 class BleHidClient : public NimBLEClientCallbacks, public NimBLEScanCallbacks {
  public:
   BleHidClient() = default;
@@ -68,10 +71,17 @@ class BleHidClient : public NimBLEClientCallbacks, public NimBLEScanCallbacks {
   bool isScanning() const { return scanning_; }
   bool isReady() const { return ready_; }  // subscribed & streaming reports
   bool isSubscribeFailed() const { return subscribeFailed_; }
+  // True while a passkey pairing waits for the user to type `passkey` on the keyboard.
+  bool pairingPasskey(uint32_t& passkey) const {
+    passkey = passkey_;
+    return passkeyActive_;
+  }
 
   // NimBLEClientCallbacks (NimBLE task)
   void onConnect(NimBLEClient* client) override;
   void onDisconnect(NimBLEClient* client, int reason) override;
+  uint32_t onPassKeyDisplay(NimBLEConnInfo& connInfo) override;
+  void onAuthenticationComplete(NimBLEConnInfo& connInfo) override;
 
   // NimBLEScanCallbacks (NimBLE task)
   void onResult(const NimBLEAdvertisedDevice* device) override;
@@ -91,6 +101,8 @@ class BleHidClient : public NimBLEClientCallbacks, public NimBLEScanCallbacks {
   volatile bool ready_ = false;
   volatile bool subscribeFailed_ = false;
   volatile bool bleRunning_ = false;  // guards getScan() before init/deinit
+  volatile bool passkeyActive_ = false;
+  volatile uint32_t passkey_ = 0;
   volatile bool connecting_ = false;  // inside client_->connect(); stop() cancels it
 
   uint32_t bondCursor_ = 0;  // round-robin position for tryBondedReconnect() (NimBLE task only)

@@ -1671,10 +1671,15 @@ void EditorActivity::loop() {
     return;
   }
 
-  // Repaint when the BLE connection state changes (status row).
-  if (bleHid_.isConnected() != lastBleConnected_ || bleHid_.isScanning() != lastBleScanning_) {
+  // Repaint when the BLE connection state changes (status row) or a pairing
+  // passkey appears/goes (top row).
+  uint32_t passkey = 0;
+  const bool pairing = bleHid_.pairingPasskey(passkey);
+  if (bleHid_.isConnected() != lastBleConnected_ || bleHid_.isScanning() != lastBleScanning_ ||
+      pairing != lastPairing_) {
     lastBleConnected_ = bleHid_.isConnected();
     lastBleScanning_ = bleHid_.isScanning();
+    lastPairing_ = pairing;
     frameDirty_ = true;
   }
 
@@ -2192,6 +2197,16 @@ void EditorActivity::requestExit() {
 // ============================================================================
 
 void EditorActivity::drawCandidateRow() {
+  uint32_t passkey = 0;
+  if (bleHid_.pairingPasskey(passkey)) {
+    // Passkey-entry pairing (first connection of some keyboards): the code
+    // has to be readable without the serial log.
+    char line[96];
+    snprintf(line, sizeof(line), tr(STR_EDITOR_PAIR_PASSKEY), static_cast<unsigned>(passkey));
+    renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, TOP_MARGIN, line, true, EpdFontFamily::BOLD);
+    renderer.drawLine(LEFT_MARGIN, textTop_ - 2, displayWidth_ - LEFT_MARGIN - hintStripW_, textTop_ - 2, true);
+    return;
+  }
   if (compose_ != ComposeState::Converting || candidates_.empty()) return;
 
   // "[3/12] 各 角 画 ..." — the current candidate first, then as many of the
@@ -2247,7 +2262,9 @@ void EditorActivity::drawStatusRow() {
   }
 
   char right[48];
-  snprintf(right, sizeof(right), "%s BLE:%s %dKB", modeStr, bleState, ESP.getFreeHeap() / 1024);
+  char heap[24];
+  snprintf(heap, sizeof(heap), tr(STR_EDITOR_FREE_HEAP), static_cast<unsigned>(ESP.getFreeHeap() / 1024));
+  snprintf(right, sizeof(right), "%s BLE:%s %s", modeStr, bleState, heap);
 
   renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, y, left, true);
 
