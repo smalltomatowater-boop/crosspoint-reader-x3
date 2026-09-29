@@ -154,7 +154,10 @@ EditorActivity::EditorActivity(GfxRenderer& renderer, MappedInputManager& mapped
 void EditorActivity::onEnter() {
   Activity::onEnter();
 
-  LOG_DBG("MEM", "Heap before BLE init: %d", ESP.getFreeHeap());
+  // Heap at each stage, INF so release builds (LOG_LEVEL=1) show them too:
+  // "Editor enter" -> "Editor ready" is the editor's own cost (document,
+  // dictionary), "Editor ready" -> BleHidClient's "NimBLE up" is BLE's.
+  LOG_INF("MEM", "Editor enter: free %u, largest %u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   // Landscape-only (user decision) — save, force, restore on exit
   // (TerminalActivity precedent).
@@ -201,6 +204,9 @@ void EditorActivity::onEnter() {
   LOG_INF("EDTR", "Kanji dictionary %s (%s: exists=%d open=%d size=%u)", dict_ ? "loaded" : "not available", DICT_PATH,
           dictExists, static_cast<bool>(dictFile_), dictFile_ ? static_cast<unsigned>(dictFile_.fileSize()) : 0u);
 
+  LOG_INF("MEM", "Editor ready: free %u, largest %u (document %u bytes, %s)", ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+          static_cast<unsigned>(document_.length()), filePath_.empty() ? "new" : "existing file");
+
   // BLE keyboard: connect at startup. The editor never touches WiFi, so
   // NimBLE's ~40KB heap cost does not collide with the WebServer problem
   // that disabled BLE in TerminalActivity.
@@ -209,7 +215,6 @@ void EditorActivity::onEnter() {
   fullRefreshNeeded_ = true;
   frameDirty_ = true;
   requestUpdate();
-  LOG_DBG("MEM", "Heap after BLE init: %d", ESP.getFreeHeap());
 }
 
 void EditorActivity::onExit() {
