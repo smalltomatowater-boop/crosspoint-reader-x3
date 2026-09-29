@@ -22,10 +22,10 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.5; 1.4.1
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.6; 1.4.1
   added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up, 1.4.3
   the NimBLE memory trim, 1.4.4 7-byte reports + passkey pairing,
-  1.4.5 the BLE client leak fix).
+  1.4.5 the BLE client leak fix, 1.4.6 release-visible editor heap logs).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -149,6 +149,32 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    fits; that path has **not run on hardware yet** (not needed after the leak
    fix). Wi-Fi as a memory hog was a guess; the owner will test it next
    (open editor → File Transfer/clock sync → editor, compare "NimBLE up").
+   **Fork vs upstream heap (2026-09-30)**: upstream at the fork point
+   (f872f1f5, app-only flashed at 0x10000, our partition table) has 143,520
+   free at home vs our 110,592, and total heap 228,088 vs 196,900. The
+   difference is sections: IRAM +20.5KB (19.6KB `libbtdm_app.a`, the BLE
+   controller; linking BLE costs this even when BLE is idle), .bss +8.4KB
+   (not yet broken down), .data +0.7KB.
+   **Tried and shelved: `CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY=y`** via
+   pioarduino HybridCompile (`custom_sdkconfig` in a `btflash` env, removed
+   again). It needed `custom_component_remove` for unused components
+   (esp_insights/rainmaker hit a HybridCompile path bug for
+   `https_server.crt.S`; esp-dsp must stay because PNGdec includes it), a
+   `CROSSPOINT_VERSION` define (`scripts/git_branch.py` only versions
+   `default`), and cleaning generated files (`CMakeLists.txt`,
+   `sdkconfig.*`, `managed_components/`, `.dummy/`, `dependencies.lock`).
+   HybridCompile rewrites the shared framework packages in `~/.platformio`,
+   and components removed once stay removed until the packages are
+   deleted. Result: IRAM 87,216 → 72,130 and home free +16.5KB (127,128),
+   stable 45 min at home, **but `esp_bt_controller_init` returns -11
+   (from the closed `btdm_controller_init`) when the editor starts BLE**,
+   then NimBLE asserts in `npl_freertos_mutex_pend`. Untried leads: flash
+   auto-suspend (IDF recommends it with this option), running without
+   NimbleConfigOverrides.h. Shelved by the owner: 25.8KB free while typing
+   is enough after the leak fix.
+   Editor heap logs are INF now (release builds show them): `Editor enter`
+   → `Editor ready` (document size, new/existing) → BleHidClient's
+   `NimBLE up`.
    The owner's device once hung silently (no serial output, fixed by an
    esptool reset); cause unknown. A 30s task watchdog was proposed, not done.
    **Heap — improved 2026-09-29 (1.4.3): ~26KB free with the keyboard
