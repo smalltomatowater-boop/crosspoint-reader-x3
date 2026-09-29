@@ -136,7 +136,7 @@ bool BleHidClient::connectTo(const NimBLEAddress& address) {
 
   client_ = NimBLEDevice::createClient(address);
   if (!client_) {
-    LOG_ERR("BLEH", "createClient failed");
+    LOG_ERR("BLEH", "createClient failed (clients=%u)", static_cast<unsigned>(NimBLEDevice::getCreatedClientCount()));
     return false;
   }
   client_->setClientCallbacks(this, false);
@@ -295,12 +295,35 @@ void BleHidClient::bleTaskRun() {
 
   // Cleanup
   ready_ = false;
-  connected_ = false;
   bleRunning_ = false;
   if (client_) {
+    // deleteClient() on a connected client only *schedules* the delete for
+    // the disconnect event. Deinit right after stops the host before that
+    // event arrives, so the client (and its discovered GATT tree, a few KB)
+    // stayed in NimBLE's static client table forever: leaked on every
+    // editor session, fragmenting the heap, and with one connection slot
+    // the next session's createClient() failed. Disconnect and wait for it
+    // while the host still runs, then delete for real.
+    LOG_DBG("BLEH", "Cleanup: isConnected=%d connected_=%d handle=%u clients=%u", client_->isConnected(),
+            static_cast<int>(connected_), client_->getConnHandle(),
+            static_cast<unsigned>(NimBLEDevice::getCreatedClientCount()));
+    // Wait for onDisconnect(), not isConnected(): disconnect() flips the
+    // status to DISCONNECTING at once, and deleteClient() defers again for
+    // that state. onDisconnect runs after NimBLE marks it DISCONNECTED.
+    if (connected_) {
+      client_->disconnect();
+      int waitedMs = 0;
+      while (connected_ && waitedMs < 2000) {  // onDisconnect() clears connected_
+        vTaskDelay(pdMS_TO_TICKS(50));
+        waitedMs += 50;
+      }
+      if (waitedMs >= 2000) LOG_ERR("BLEH", "Disconnect timed out; client may leak");
+    }
     NimBLEDevice::deleteClient(client_);
     client_ = nullptr;
+    LOG_DBG("BLEH", "Cleanup: clients after delete=%u", static_cast<unsigned>(NimBLEDevice::getCreatedClientCount()));
   }
+  connected_ = false;
   delete device_;
   device_ = nullptr;
   // clearAll=true: with false NimBLE keeps its scan object (and every
