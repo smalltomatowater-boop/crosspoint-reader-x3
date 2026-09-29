@@ -22,8 +22,9 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.2; 1.4.1
-  added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up).
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.3; 1.4.1
+  added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up, 1.4.3
+  the NimBLE memory trim).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -125,7 +126,27 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    p2-via-framebuffer path). The two-plane single allocation (~104KB) still
    isn't possible after BLE use: something else in NimBLE/the controller
    stays allocated. Not yet found.
-2. **Heap**: ~18KB free with the keyboard connected, under the 50KB rule —
+2. **Heap — improved 2026-09-29 (1.4.3): ~26KB free with the keyboard
+   connected (was ~18KB).** Stages measured on device: home 109.9KB →
+   editor open 98.5KB → editor ready 78-79KB → NimBLE up 21.6KB (now 30.0KB) →
+   ready 17.9KB (now 26.3KB). NimBLEDevice::init() is the bulk (56.7KB, now
+   49.2KB); connect + GATT + 5 subscribes add only ~3.5KB. Fix:
+   `src/ble/NimbleConfigOverrides.h`, force-included by `platformio.ini`
+   (`-include`). The core's precompiled sdkconfig.h sets NimBLE to 4 roles, 3
+   connections and 24 msys2 blocks, and `-D` flags lose to it ("redefined"
+   warning; verified with static_asserts). sdkconfig.h is `#pragma once`,
+   so the header includes it first and then redefines: 1 connection,
+   peripheral and broadcaster roles off (controller `ble_max_act` 5 → 2),
+   msys2 24 → 12. Plus `setScanDuplicateCacheSize(20)` (was 100) and
+   `scan->setMaxResults(0)` (was storing every advertiser seen).
+   static_asserts in BleHidClient.cpp fail the build if a core update stops
+   the override applying. A user with a Logitech Keys-To-Go 2 reported
+   occasional crashes from low memory; the owner is contacting them. They
+   also found that keyboard sends **7-byte** reports, which `notifyCallback`
+   drops (`len < 8`). The byte layout isn't known yet: don't guess, get
+   their log or patch. Remaining smaller levers: msys1 (12 × 256B), host task
+   stack (4KB, risky). Old note follows:
+   ~18KB free with the keyboard connected, under the 50KB rule —
    see "Heap budget" for measurements and candidate fixes (passive scan,
    shorter scan window, NimBLE config).
 3. Not yet exercised on device: Open, New, and the discard-unsaved-changes
