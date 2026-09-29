@@ -25,12 +25,10 @@ jobs:
       - name: Install PlatformIO Core
         run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
 
-      - name: Cache PlatformIO packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-${{ runner.os }}-
+      # No PlatformIO cache here: distributed firmware is built from freshly
+      # downloaded packages. The cache's prefix restore-key could bring back
+      # packages from an older platformio.ini, so a release might not match
+      # what a clean local build produces.
 
       - name: Extract env
         run: |
