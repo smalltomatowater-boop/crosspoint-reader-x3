@@ -22,9 +22,9 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.3; 1.4.1
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.4; 1.4.1
   added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up, 1.4.3
-  the NimBLE memory trim).
+  the NimBLE memory trim, 1.4.4 7-byte reports + passkey pairing).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -143,8 +143,18 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    the override applying. A user with a Logitech Keys-To-Go 2 reported
    occasional crashes from low memory; the owner is contacting them. They
    also found that keyboard sends **7-byte** reports, which `notifyCallback`
-   drops (`len < 8`). The byte layout isn't known yet: don't guess, get
-   their log or patch. Remaining smaller levers: msys1 (12 × 256B), host task
+   dropped (`len < 8`). **1.4.4 (2026-09-29)** handles them from their
+   measurements (A = `00 04 00 00 00 00 00`, Shift+A = `02 04 ...`: mods,
+   then keys[6], no reserved byte). It also adds passkey pairing, which they
+   needed for the first pairing: MITM + `BLE_HS_IO_DISPLAY_ONLY`, a random
+   6-digit code from `onPassKeyDisplay` (NimBLE's default is its static
+   123456), shown bold on the editor's top row. Neither is verified on our
+   device (no Keys-To-Go 2, no new pairing done). The owner's bonded keyboard
+   still reconnects (encrypted, unauthenticated Just Works bond). The
+   terminal doesn't show the passkey yet: pair from the editor first. Their
+   environment had ~17KB less free before BLE than ours, and down to ~2KB
+   while typing, with frequent crashes during kanji conversion (not yet
+   confirmed as OOM). Remaining smaller levers: msys1 (12 × 256B), host task
    stack (4KB, risky). Old note follows:
    ~18KB free with the keyboard connected, under the 50KB rule —
    see "Heap budget" for measurements and candidate fixes (passive scan,
