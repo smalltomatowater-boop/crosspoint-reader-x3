@@ -159,3 +159,21 @@ TEST(RealDictionary, CommonWords) {
   EXPECT_TRUE(contains(buildConversionCandidates(&dict, "へんかん"), "変換"));
   EXPECT_TRUE(contains(buildConversionCandidates(&dict, "たべた"), "食べた"));
 }
+
+// A reading with many whole-word and okurigana candidates must stay within
+// MAX_CONVERSION_CANDIDATES + 2 (katakana, hiragana), so the up-front reserve
+// is never outgrown (a regrowth on a nearly full heap aborted a device).
+TEST(Candidates, CappedAtMax) {
+  std::string whole = "かんじる /";
+  for (int i = 0; i < 40; ++i) whole += "w" + std::to_string(i) + "/";
+  std::string okuri = "かんz /";
+  for (int i = 0; i < 40; ++i) okuri += "s" + std::to_string(i) + "/";
+  // Byte-sorted: "かんz" (0x7A) sorts before "かんじる" (0xE3...).
+  const std::string data = okuri + "\n" + whole + "\n";
+  SkkDictionary dict(sourceFor(data));
+  const auto c = buildConversionCandidates(&dict, "かんじる");
+  EXPECT_LE(c.size(), MAX_CONVERSION_CANDIDATES + 2);
+  EXPECT_TRUE(contains(c, "カンジル"));
+  EXPECT_TRUE(contains(c, "かんじる"));
+  EXPECT_TRUE(contains(c, "w0"));
+}

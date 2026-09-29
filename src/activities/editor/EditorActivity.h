@@ -153,6 +153,11 @@ class EditorActivity final : public Activity {
   std::vector<std::string> candidates_;
   size_t candIndex_ = 0;
   static constexpr uint32_t MAX_READING_BYTES = 96;  // 32 kana; longer compositions aren't converted
+  // Below these, convertStep() leaves the kana as typed rather than risk an
+  // allocation failure (which aborts). Conversion needs a few KB.
+  static constexpr uint32_t MIN_CONVERT_FREE_HEAP = 8 * 1024;
+  static constexpr uint32_t MIN_CONVERT_BLOCK = 2 * 1024;
+  bool lowMemNotice_ = false;  // top row says conversion was skipped; cleared by the next key
 
   static constexpr const char* DICT_PATH = "/dict/skk.txt";  // scripts/build_skk_dict.py output
   HalFile dictFile_;

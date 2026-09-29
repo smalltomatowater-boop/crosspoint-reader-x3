@@ -316,6 +316,15 @@ void EditorActivity::convertStep(int dir) {
     }
     const uint32_t len = cursorPos_ - compStart_;
     if (len > MAX_READING_BYTES) return;  // too long to be one word; leave it as typed
+    // Conversion allocates a few KB (the 1KB dictionary line, up to 34
+    // strings). With the heap nearly exhausted that aborted a user's device
+    // (bad_alloc under -fno-exceptions), so leave the kana as typed instead.
+    if (ESP.getFreeHeap() < MIN_CONVERT_FREE_HEAP || ESP.getMaxAllocHeap() < MIN_CONVERT_BLOCK) {
+      LOG_ERR("EDTR", "Low memory, not converting (free %u, largest %u)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      lowMemNotice_ = true;
+      frameDirty_ = true;
+      return;
+    }
     compReading_.assign(len, '\0');
     compReading_.resize(document_.readAt(compStart_, compReading_.data(), len));
     candidates_ = buildConversionCandidates(dict_.get(), compReading_);
@@ -541,6 +550,10 @@ void EditorActivity::redoLastChange() {
 }
 
 void EditorActivity::onBleKey(const HidKeyEvent& ev) {
+  if (lowMemNotice_) {
+    lowMemNotice_ = false;  // shown until the next key
+    frameDirty_ = true;
+  }
   bool contentChanged = false;
   bool cursorMoved = false;
   bool isVertical =
@@ -2197,6 +2210,11 @@ void EditorActivity::requestExit() {
 // ============================================================================
 
 void EditorActivity::drawCandidateRow() {
+  if (lowMemNotice_) {
+    renderer.drawText(EDITOR_FONT_ID, LEFT_MARGIN, TOP_MARGIN, tr(STR_EDITOR_LOW_MEMORY), true);
+    renderer.drawLine(LEFT_MARGIN, textTop_ - 2, displayWidth_ - LEFT_MARGIN - hintStripW_, textTop_ - 2, true);
+    return;
+  }
   uint32_t passkey = 0;
   if (bleHid_.pairingPasskey(passkey)) {
     // Passkey-entry pairing (first connection of some keyboards): the code

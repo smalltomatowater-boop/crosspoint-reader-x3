@@ -84,6 +84,7 @@ std::string hiraganaToKatakana(std::string_view hiragana) {
 std::vector<std::string> buildConversionCandidates(const SkkDictionary* dict, std::string_view reading) {
   std::vector<std::string> out;
   if (reading.empty()) return out;
+  out.reserve(MAX_CONVERSION_CANDIDATES + 2);  // + katakana + hiragana: no regrowth below
 
   if (dict) {
     dict->lookup(reading, out);
@@ -93,7 +94,9 @@ std::vector<std::string> buildConversionCandidates(const SkkDictionary* dict, st
     // "かんz" (+ じる) and 書く is "かk" (+ く).
     constexpr int MAX_OKURI_KANA = 3;
     size_t okuriStart = reading.size();
-    for (int n = 0; n < MAX_OKURI_KANA && okuriStart > 0; ++n) {
+    std::vector<std::string> stems;
+    stems.reserve(SkkDictionary::MAX_CANDIDATES);
+    for (int n = 0; n < MAX_OKURI_KANA && okuriStart > 0 && out.size() < MAX_CONVERSION_CANDIDATES; ++n) {
       do {
         --okuriStart;
       } while (okuriStart > 0 && (static_cast<uint8_t>(reading[okuriStart]) & 0xC0) == 0x80);
@@ -106,10 +109,11 @@ std::vector<std::string> buildConversionCandidates(const SkkDictionary* dict, st
 
       std::string key(reading.substr(0, okuriStart));
       key += letter;
-      std::vector<std::string> stems;
+      stems.clear();
       dict->lookup(key, stems);
       const std::string okurigana(reading.substr(okuriStart));
-      for (auto& stem : stems) {
+      for (const auto& stem : stems) {
+        if (out.size() >= MAX_CONVERSION_CANDIDATES) break;
         addUnique(out, stem + okurigana);
       }
     }

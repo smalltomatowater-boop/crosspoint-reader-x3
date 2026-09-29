@@ -17,6 +17,11 @@ class SkkDictionary;
 // Duplicates are dropped. `dict` may be null (no dictionary on the SD card),
 // in which case only (3) is returned. Pure logic, host-tested
 // (test/kana_converter).
+// At most MAX_CONVERSION_CANDIDATES dictionary candidates (plus the katakana
+// and hiragana forms). The vector is reserved once up front: growing it by
+// doubling while the heap was nearly exhausted is where a user's device
+// aborted (bad_alloc -> abort under -fno-exceptions).
+constexpr size_t MAX_CONVERSION_CANDIDATES = 32;
 std::vector<std::string> buildConversionCandidates(const SkkDictionary* dict, std::string_view reading);
 
 // SKK okuri letter for a hiragana codepoint ('k' for く, 'u' for う, 'z' for
