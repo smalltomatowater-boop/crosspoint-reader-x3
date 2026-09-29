@@ -116,7 +116,7 @@ python3 scripts/build_skk_dict.py SKK-JISYO.L skk.txt
 The dictionary is loaded when the editor opens, so reopen the editor after copying it. Without a dictionary, the candidate row shows "(no dict)" and only katakana and hiragana are offered.
 
 ### Known issues
-- Free memory is low while a BLE keyboard is connected (about 18KB).
+- Free memory is low while a BLE keyboard is connected (about 26KB; 1.4.3 trimmed the BLE stack, up from about 18KB).
 
 ---
 

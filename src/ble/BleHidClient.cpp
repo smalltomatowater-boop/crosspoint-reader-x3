@@ -6,6 +6,13 @@
 #include <NimBLERemoteService.h>
 #include <string.h>
 
+// NimbleConfigOverrides.h (force-included) must win over the core's sdkconfig.h;
+// fail the build if a core update ever stops that.
+static_assert(CONFIG_BT_NIMBLE_MAX_CONNECTIONS == 1, "NimbleConfigOverrides.h not applied: max connections");
+static_assert(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL == 0, "NimbleConfigOverrides.h not applied: peripheral role");
+static_assert(CONFIG_BT_NIMBLE_ROLE_BROADCASTER == 0, "NimbleConfigOverrides.h not applied: broadcaster role");
+static_assert(MYNEWT_VAL(MSYS_2_BLOCK_COUNT) == 12, "NimbleConfigOverrides.h not applied: msys2 pool");
+
 static const char* HID_SERVICE_UUID = "1812";
 static const char* HID_REPORT_UUID = "2a4d";
 static constexpr int KEY_QUEUE_LEN = 32;
@@ -61,7 +68,7 @@ void BleHidClient::notifyCallback(NimBLERemoteCharacteristic* ch, uint8_t* data,
 void BleHidClient::onConnect(NimBLEClient* client) {
   (void)client;
   connected_ = true;
-  LOG_INF("BLEH", "Keyboard connected");
+  LOG_INF("BLEH", "Keyboard connected (free %u, largest %u)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 void BleHidClient::onDisconnect(NimBLEClient* client, int reason) {
@@ -159,7 +166,8 @@ bool BleHidClient::connectTo(const NimBLEAddress& address) {
   }
 
   ready_ = true;
-  LOG_INF("BLEH", "Keyboard ready");
+  LOG_INF("BLEH", "Keyboard ready (free %u, largest %u, min %u)", ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+          ESP.getMinFreeHeap());
   return true;
 }
 
@@ -170,6 +178,10 @@ void BleHidClient::startScan(uint32_t durationMs) {
   scan->setInterval(100);
   scan->setWindow(99);
   scan->setActiveScan(true);
+  // Don't keep a list of every advertiser seen: onResult() copies the one
+  // keyboard it wants, and in a busy place the list grew by one heap object
+  // per nearby device.
+  scan->setMaxResults(0);
   scan->start(durationMs);
   LOG_INF("BLEH", "Scanning for HID keyboards...");
 }
@@ -212,6 +224,9 @@ void BleHidClient::bleTaskEntry(void* arg) {
 }
 
 void BleHidClient::bleTaskRun() {
+  // Must precede init(). The controller keeps this many advertisers for
+  // duplicate filtering (default 100); we only look for one keyboard.
+  NimBLEDevice::setScanDuplicateCacheSize(20);
   NimBLEDevice::init(deviceName_.c_str());
   // HOGP requires an encrypted link for HID reports. NimBLE pairs on demand
   // when a subscribe hits an insufficient-encryption error
@@ -219,6 +234,7 @@ void BleHidClient::bleTaskRun() {
   // (CONFIG_BT_NIMBLE_NVS_PERSIST) so later reconnects skip pairing.
   NimBLEDevice::setSecurityAuth(/*bonding=*/true, /*mitm=*/false, /*sc=*/true);
   bleRunning_ = true;
+  LOG_INF("BLEH", "NimBLE up (free %u, largest %u)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   while (!stopRequested_) {
     if (connectPending_) {
