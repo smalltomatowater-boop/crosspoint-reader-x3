@@ -22,10 +22,10 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.6; 1.4.1
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.7; 1.4.1
   added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up, 1.4.3
   the NimBLE memory trim, 1.4.4 7-byte reports + passkey pairing,
-  1.4.5 the BLE client leak fix, 1.4.6 release-visible editor heap logs).
+  1.4.5 the BLE client leak fix, 1.4.6 release-visible editor heap logs, 1.4.7 two OTA slots).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -149,6 +149,21 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    fits; that path has **not run on hardware yet** (not needed after the leak
    fix). Wi-Fi as a memory hog was a guess; the owner will test it next
    (open editor → File Transfer/clock sync → editor, compare "NimBLE up").
+   **1.4.7 (2026-09-30): SD-card/OTA update was impossible after a USB
+   flash.** The fork's partitions.csv (since 6769d51e, "X3 Japanese UI")
+   had a single 11MB app partition, so `esp_ota_get_next_update_partition()`
+   returned the running app0 and erasing it aborted (IDF dangerous-write
+   check in `esp_flash_erase_region`), reported by the Keys-To-Go 2 user.
+   Devices that got the fork by SD update from upstream kept upstream's two
+   6.4MB slots and worked. Now: app0/app1 0x7E0000 each (~8.3MB, firmware
+   ~5.9MB), coredump 0xFD0000, nvs unchanged at 0x9000 (bonds/settings
+   survive). `firmware_flash::updateTargetPartition()` refuses the running
+   partition (SD update shows STR_FIRMWARE_NEEDS_USB_FLASH instead of
+   crashing); OTA's `esp_ota_begin` already refuses it. Releases now carry
+   `boot_app0.bin` for a full USB flash (0x0 bootloader, 0x8000 partitions,
+   0xe000 boot_app0, 0x10000 firmware); README explains it. Verified on
+   device: USB flash with the new table, then SD update → `dest=app1
+   @0x7f0000`, otadata switched to slot 1, booted.
    **Fork vs upstream heap (2026-09-30)**: upstream at the fork point
    (f872f1f5, app-only flashed at 0x10000, our partition table) has 143,520
    free at home vs our 110,592, and total heap 228,088 vs 196,900. The
