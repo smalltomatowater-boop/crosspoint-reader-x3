@@ -197,10 +197,15 @@ void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int butt
   (void)rowIcon;
   const int sidePadding = RoundedRaffMetrics::values.contentSidePadding;
   const int rowX = rect.x + sidePadding;
-  const int rowHeight = renderer.getLineHeight(kTitleFontId) + 20;  // 10px top + 10px bottom
   const int rowGap = kSelectableRowGap;
+  // 10px top + 10px bottom, trimmed (down to 4px each) so a full home menu fits on one page before paging kicks in.
+  int rowHeight = renderer.getLineHeight(kTitleFontId) + 20;
+  if (buttonCount > 0 && rect.height > 0) {
+    rowHeight = std::min(rowHeight, (rect.height + rowGap) / buttonCount - rowGap);
+    rowHeight = std::max(rowHeight, renderer.getLineHeight(kTitleFontId) + 8);
+  }
   const int rowStep = rowHeight + rowGap;
-  const int pageItems = std::max(1, rect.height / rowStep);
+  const int pageItems = std::max(1, (rect.height + rowGap) / rowStep);  // no gap needed after the last row
   const int safeSelectedIndex = std::max(0, selectedIndex);
   const int pageStartIndex = (safeSelectedIndex / pageItems) * pageItems;
   const int menuTop = rect.y;

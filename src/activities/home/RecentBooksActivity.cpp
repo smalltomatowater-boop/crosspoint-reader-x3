@@ -139,7 +139,15 @@ void RecentBooksActivity::render(RenderLock&&) {
   } else {
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, recentBooks.size(), selectorIndex,
-        [this](int index) { return recentBooks[index].title; }, [this](int index) { return recentBooks[index].author; },
+        [this](int index) {
+          // Metadata titles can be empty or hold glyphs the UI font lacks (U+FFFD from a bad
+          // encoding, rare kanji); show the file name instead of a blank or clipped row.
+          const RecentBook& book = recentBooks[index];
+          if (!book.title.empty() && renderer.canRenderText(UI_10_FONT_ID, book.title.c_str())) return book.title;
+          const size_t slash = book.path.find_last_of('/');
+          return slash == std::string::npos ? book.path : book.path.substr(slash + 1);
+        },
+        [this](int index) { return recentBooks[index].author; },
         [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); });
   }
 

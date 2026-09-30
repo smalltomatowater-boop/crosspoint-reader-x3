@@ -19,7 +19,6 @@
 namespace {
 constexpr int homeMenuMargin = 20;
 constexpr int homeMarginTop = 30;
-constexpr int subtitleY = 738;
 
 }  // namespace
 
@@ -355,6 +354,9 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
     auto truncatedSubtitle = renderer.truncatedText(
         SMALL_FONT_ID, subtitle, rect.width - BaseMetrics::values.contentSidePadding * 2, EpdFontFamily::REGULAR);
     int truncatedSubtitleWidth = renderer.getTextWidth(SMALL_FONT_ID, truncatedSubtitle.c_str());
+    // Just above the button hints; the old fixed y=738 fit the 800px X4 but overlapped the hints on the X3.
+    const int subtitleY =
+        renderer.getScreenHeight() - BaseMetrics::values.buttonHintsHeight - renderer.getLineHeight(SMALL_FONT_ID) - 4;
     renderer.drawText(SMALL_FONT_ID,
                       rect.x + rect.width - BaseMetrics::values.contentSidePadding - truncatedSubtitleWidth, subtitleY,
                       truncatedSubtitle.c_str(), true);
@@ -643,12 +645,12 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
-  // Shrink the rows when they don't all fit (e.g. with OPDS added), so the last one stays on screen.
+  // Shrink the rows when they don't all fit (e.g. with OPDS added), keeping a gap above the button hints.
   const int spacing = BaseMetrics::values.menuSpacing;
   int rowHeight = BaseMetrics::values.menuRowHeight;
-  if (buttonCount > 0 && rect.height > BaseMetrics::values.verticalSpacing) {
+  if (buttonCount > 0 && rect.height > BaseMetrics::values.verticalSpacing * 2) {
     rowHeight =
-        std::min(rowHeight, (rect.height - BaseMetrics::values.verticalSpacing + spacing) / buttonCount - spacing);
+        std::min(rowHeight, (rect.height - BaseMetrics::values.verticalSpacing * 2 + spacing) / buttonCount - spacing);
     rowHeight = std::max(rowHeight, renderer.getLineHeight(UI_10_FONT_ID));
   }
   for (int i = 0; i < buttonCount; ++i) {

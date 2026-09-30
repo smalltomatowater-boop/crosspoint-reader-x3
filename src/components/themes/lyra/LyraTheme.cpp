@@ -271,15 +271,21 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       rowTextWidth -= valueWidth;
     }
 
+    // Rows without a subtitle (e.g. a book with no author) center the title instead of leaving it on the top line.
+    std::string subtitleText = rowSubtitle != nullptr ? rowSubtitle(i) : std::string();
+    const int titleY = subtitleText.empty() && rowSubtitle != nullptr
+                           ? itemY + (rowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2
+                           : itemY + 7;
+
     auto itemName = rowTitle(i);
     auto item = renderer.truncatedText(UI_10_FONT_ID, itemName.c_str(), rowTextWidth);
-    renderer.drawText(UI_10_FONT_ID, textX, itemY + 7, item.c_str(), true);
+    renderer.drawText(UI_10_FONT_ID, textX, titleY, item.c_str(), true);
 
     // Apply checkerboard dither to create gray text effect for dimmed items
     if (rowDimmed && rowDimmed(i) && i != selectedIndex) {
       const int titleWidth = renderer.getTextWidth(UI_10_FONT_ID, item.c_str());
       const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
-      for (int py = itemY + 7; py < itemY + 7 + lineH; py++)
+      for (int py = titleY; py < titleY + lineH; py++)
         for (int px = textX; px < textX + titleWidth; px++)
           if ((px + py) % 2 == 0) renderer.drawPixel(px, py, false);
     }
@@ -287,15 +293,21 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     if (rowIcon != nullptr) {
       UIIcon icon = rowIcon(i);
       const uint8_t* iconBitmap = iconForName(icon, iconSize);
+      int drawSize = iconSize;
+      if (iconBitmap == nullptr && iconSize != listIconSize) {
+        // No 32px art for text/image/file; center the 24px one in the 32px slot.
+        iconBitmap = iconForName(icon, listIconSize);
+        drawSize = listIconSize;
+      }
       if (iconBitmap != nullptr) {
-        renderer.drawIcon(iconBitmap, rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection,
-                          itemY + iconY, iconSize, iconSize);
+        const int inset = (iconSize - drawSize) / 2;
+        renderer.drawIcon(iconBitmap, rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection + inset,
+                          itemY + iconY + inset, drawSize, drawSize);
       }
     }
 
-    if (rowSubtitle != nullptr) {
+    if (!subtitleText.empty()) {
       // Draw subtitle
-      std::string subtitleText = rowSubtitle(i);
       auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
       renderer.drawText(SMALL_FONT_ID, textX, itemY + 30, subtitle.c_str(), true);
     }
