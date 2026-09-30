@@ -22,10 +22,11 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.7; 1.4.1
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.8; 1.4.1
   added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up, 1.4.3
   the NimBLE memory trim, 1.4.4 7-byte reports + passkey pairing,
-  1.4.5 the BLE client leak fix, 1.4.6 release-visible editor heap logs, 1.4.7 two OTA slots).
+  1.4.5 the BLE client leak fix, 1.4.6 release-visible editor heap logs, 1.4.7 two OTA slots,
+  1.4.8 home menu rows kept on screen).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -164,6 +165,15 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    0xe000 boot_app0, 0x10000 firmware); README explains it. Verified on
    device: USB flash with the new table, then SD update → `dest=app1
    @0x7f0000`, otadata switched to slot 1, booted.
+   **1.4.8 (2026-09-30): home menu overflow.** With Lyra Extended
+   (`LYRA_3_COVERS`, UI name "Lyra Extended") and six menu items, Lyra's
+   fixed 64px rows put Settings at y=732..795 on a 792px screen; selecting
+   it spammed GFX "Outside range" (one LOG_ERR per pixel, reporter's log.2).
+   HomeActivity also passed a menu height that ran past the screen. Now it
+   passes pageHeight - menuY - buttonHintsHeight, and Lyra/Classic shrink
+   rows only when they don't fit (RoundedRaff already pages). Measured
+   Lyra Extended home heap: 106,184 free vs ~110,500 on Lyra (bigger cover
+   snapshot), so theme explains only ~4KB of the reporter's 28.5KB gap.
    **Fork vs upstream heap (2026-09-30)**: upstream at the fork point
    (f872f1f5, app-only flashed at 0x10000, our partition table) has 143,520
    free at home vs our 110,592, and total heap 228,088 vs 196,900. The
