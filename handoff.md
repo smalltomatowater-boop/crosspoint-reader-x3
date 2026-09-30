@@ -22,11 +22,11 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.8; 1.4.1
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.9; 1.4.1
   added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up, 1.4.3
   the NimBLE memory trim, 1.4.4 7-byte reports + passkey pairing,
   1.4.5 the BLE client leak fix, 1.4.6 release-visible editor heap logs, 1.4.7 two OTA slots,
-  1.4.8 home menu rows kept on screen).
+  1.4.8 home menu rows kept on screen, 1.4.9 theme layout + SD font only in reader).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -174,6 +174,27 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    rows only when they don't fit (RoundedRaff already pages). Measured
    Lyra Extended home heap: 106,184 free vs ~110,500 on Lyra (bigger cover
    snapshot), so theme explains only ~4KB of the reporter's 28.5KB gap.
+   **1.4.9 (2026-09-30): the reporter's low heap was the SD reader font.**
+   Their settings: uiTheme 2 (Lyra Extended, ~4KB more for the 300-row
+   cover snapshot) and sdFontFamilyName "KaboJP_Joyo" (their own
+   ASCII+kana+Joyo build). `SdCardFont::load` keeps per-style interval
+   tables (12B each; Joyo kanji are scattered so intervals ~= glyphs) plus
+   kern classes resident. Measured with a test font (Migu 1C 14pt, JIS
+   level-1, 2 styles, 2331 intervals/style): **59,060 bytes resident**. It
+   was loaded at boot (`SdCardFontSystem::begin`) and never freed outside
+   the reader, so home had 82KB free and XTC thumbnails (104KB page buffer)
+   and TXT grayscale (BW buffer chunks) failed. Now begin() only validates
+   the name, ReaderActivity's ensureLoaded() loads it, HomeActivity and
+   EditorActivity call `sdFontSystem.unload()`. INF logs: "Loaded SD font
+   ... resident N bytes" / "Unloaded SD font: freed N". Still open: while
+   reading, a 2-style scattered-kanji font costs ~59KB and TXT grayscale
+   failed once; fix would be a two-level interval index (resident first
+   codepoint per 64 intervals, read one 768B chunk from SD per lookup in
+   `findGlobalGlyphIndex`). Also in 1.4.9: RoundedRaff pageItems counted a
+   trailing gap (Settings alone on page 2), Classic version text moved above
+   the hints (was fixed y=738 for the X4), Lyra lists fall back to 24px
+   icons (no 32px text/image/file art) and center titles without subtitle,
+   Recents shows the file name for empty/unrenderable titles.
    **Fork vs upstream heap (2026-09-30)**: upstream at the fork point
    (f872f1f5, app-only flashed at 0x10000, our partition table) has 143,520
    free at home vs our 110,592, and total heap 228,088 vs 196,900. The
