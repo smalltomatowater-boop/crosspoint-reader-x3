@@ -1,5 +1,6 @@
 #include "SdCardFontSystem.h"
 
+#include <Arduino.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 
@@ -9,6 +10,28 @@ static uint8_t fontSizeEnumFromSettings() {
   uint8_t e = SETTINGS.fontSize;
   if (e >= CrossPointSettings::FONT_SIZE_COUNT) e = 1;  // default to MEDIUM
   return e;
+}
+
+// INF so release builds show what the selected SD font keeps resident (its
+// interval and kern tables live in the heap for as long as it is loaded).
+bool SdCardFontSystem::loadFamilyLogged(const SdCardFontFamilyInfo& family, GfxRenderer& renderer) {
+  const uint32_t before = ESP.getFreeHeap();
+  const bool ok = manager_.loadFamily(family, renderer, fontSizeEnumFromSettings());
+  if (ok) {
+    const uint32_t after = ESP.getFreeHeap();
+    LOG_INF("SDFS", "Loaded SD font %s %upt: resident %d bytes, free %u", family.name.c_str(),
+            manager_.currentPointSize(), static_cast<int>(before) - static_cast<int>(after), after);
+  }
+  return ok;
+}
+
+void SdCardFontSystem::unload(GfxRenderer& renderer) {
+  if (manager_.currentFamilyName().empty()) return;
+  const uint32_t before = ESP.getFreeHeap();
+  manager_.unloadAll(renderer);
+  const uint32_t after = ESP.getFreeHeap();
+  LOG_INF("SDFS", "Unloaded SD font: freed %d bytes, free %u", static_cast<int>(after) - static_cast<int>(before),
+          after);
 }
 
 void SdCardFontSystem::begin(GfxRenderer& renderer) {
@@ -21,16 +44,12 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   };
   SETTINGS.sdFontResolverCtx = this;
 
-  // If user has a saved SD font selection, load it
+  // Only check that the saved SD font still exists. Loading it keeps its tables resident
+  // (~59KB for a 2-style Joyo-kanji font), so it is deferred to ReaderActivity's ensureLoaded().
   if (SETTINGS.sdFontFamilyName[0] != '\0') {
     const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
     if (family) {
-      if (manager_.loadFamily(*family, renderer, fontSizeEnumFromSettings())) {
-        LOG_DBG("SDFS", "Loaded SD card font family: %s", SETTINGS.sdFontFamilyName);
-      } else {
-        LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", SETTINGS.sdFontFamilyName);
-        SETTINGS.sdFontFamilyName[0] = '\0';
-      }
+      LOG_DBG("SDFS", "SD card font family on card: %s (loaded on reader entry)", SETTINGS.sdFontFamilyName);
     } else {
       LOG_DBG("SDFS", "SD font family not found on card: %s (clearing)", SETTINGS.sdFontFamilyName);
       SETTINGS.sdFontFamilyName[0] = '\0';
@@ -89,7 +108,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
 
   const auto* family = registry_.findFamily(wantedFamily);
   if (family) {
-    if (manager_.loadFamily(*family, renderer, sizeEnum)) {
+    if (loadFamilyLogged(*family, renderer)) {
       LOG_DBG("SDFS", "Loaded SD font family: %s", wantedFamily);
     } else {
       LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", wantedFamily);

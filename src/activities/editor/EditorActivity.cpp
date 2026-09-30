@@ -17,6 +17,7 @@
 
 #include "CrossPointSettings.h"
 #include "KanaConverter.h"
+#include "SdCardFontSystem.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -157,6 +158,9 @@ void EditorActivity::onEnter() {
   // Heap at each stage, INF so release builds (LOG_LEVEL=1) show them too:
   // "Editor enter" -> "Editor ready" is the editor's own cost (document,
   // dictionary), "Editor ready" -> BleHidClient's "NimBLE up" is BLE's.
+  // The editor only draws with the built-in UI font, so drop the reader's SD font
+  // (resident interval/kern tables) for the session; ReaderActivity reloads it.
+  sdFontSystem.unload(renderer);
   LOG_INF("MEM", "Editor enter: free %u, largest %u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   // Landscape-only (user decision) — save, force, restore on exit

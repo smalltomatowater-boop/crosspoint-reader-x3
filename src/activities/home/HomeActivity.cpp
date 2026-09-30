@@ -17,6 +17,7 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -110,6 +111,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+
+  // Home never draws reader text; free the reader's SD font so covers and the
+  // activities launched from here get its heap. ReaderActivity reloads it.
+  sdFontSystem.unload(renderer);
 
   hasOpdsServers = OPDS_STORE.hasServers();
 

@@ -14,13 +14,19 @@ class SdCardFontSystem {
   SdCardFontSystem() = default;
   SdCardFontSystem(const SdCardFontSystem&) = delete;
   SdCardFontSystem& operator=(const SdCardFontSystem&) = delete;
-  /// Discover SD card fonts and load user's saved selection. Call once during setup.
+  /// Discover SD card fonts and validate the user's saved selection (loaded later by ensureLoaded()).
+  /// Call once during setup.
   void begin(GfxRenderer& renderer);
 
   /// Ensure the correct SD font family is loaded for the current settings.
   /// Call before entering the reader or after settings change.
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
   void ensureLoaded(GfxRenderer& renderer);
+
+  /// Free the loaded SD font (its interval/kern tables stay resident while loaded).
+  /// The selection in SETTINGS is kept; the next ensureLoaded() (reader entry) reloads it.
+  /// Used by activities that never draw reader text (home, editor).
+  void unload(GfxRenderer& renderer);
 
   /// Resolve an SD card font ID from family name + fontSize enum.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
@@ -46,6 +52,8 @@ class SdCardFontSystem {
   }
 
  private:
+  bool loadFamilyLogged(const SdCardFontFamilyInfo& family, GfxRenderer& renderer);
+
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
   std::atomic<bool> registryDirty_{false};
