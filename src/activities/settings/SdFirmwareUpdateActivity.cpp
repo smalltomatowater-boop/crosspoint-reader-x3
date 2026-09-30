@@ -78,10 +78,12 @@ bool SdFirmwareUpdateActivity::validateFirmware() {
   // probed via Update.begin(firmwareSize)/Update.abort() to learn the partition
   // size, which had the side effect of erasing partition state and was wasted
   // work since we only need the size bound for validation here.
-  const esp_partition_t* dest = esp_ota_get_next_update_partition(nullptr);
+  const esp_partition_t* dest = firmware_flash::updateTargetPartition();
   if (!dest) {
-    LOG_ERR("FW", "no next-update partition available");
-    errorMessage = tr(STR_INVALID_FIRMWARE);
+    // Single app partition (flashed over USB with an older partitions.csv):
+    // the device must be flashed over USB once to get two update slots.
+    LOG_ERR("FW", "no usable update partition");
+    errorMessage = tr(STR_FIRMWARE_NEEDS_USB_FLASH);
     return false;
   }
   const size_t partitionLimit = dest->size;

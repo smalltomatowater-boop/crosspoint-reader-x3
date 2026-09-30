@@ -226,13 +226,24 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
   return Result::OK;
 }
 
+const esp_partition_t* updateTargetPartition() {
+  const esp_partition_t* dest = esp_ota_get_next_update_partition(nullptr);
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (dest && running && dest->address == running->address) {
+    LOG_ERR("FLASH", "only one app partition (%s @0x%x); updating would erase the running firmware", dest->label,
+            static_cast<unsigned>(dest->address));
+    return nullptr;
+  }
+  return dest;
+}
+
 Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, bool alreadyValidated) {
   // Resolve destination first so we can size-check during validation. The full image-integrity
   // pass below verifies header, segment table, XOR checksum and SHA256 trailer end-to-end before
   // we touch otadata, so a truncated/corrupted .bin can never become the next boot target.
-  const esp_partition_t* dest = esp_ota_get_next_update_partition(nullptr);
+  const esp_partition_t* dest = updateTargetPartition();
   if (!dest) {
-    LOG_ERR("FLASH", "no next-update partition");
+    LOG_ERR("FLASH", "no usable update partition");
     return Result::NO_PARTITION;
   }
 

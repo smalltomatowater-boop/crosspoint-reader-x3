@@ -1,5 +1,7 @@
 #pragma once
 
+#include <esp_partition.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -13,6 +15,12 @@
 // downloads the firmware to an SD-card cache file, then calls this.
 
 namespace firmware_flash {
+
+// The partition an update should be written to, or nullptr if there is none
+// usable. With a single app partition, esp_ota_get_next_update_partition()
+// returns the *running* one; erasing it aborts the device (IDF's
+// dangerous-write check in esp_flash_erase_region), so that case is refused.
+const esp_partition_t* updateTargetPartition();
 
 enum class Result {
   OK,

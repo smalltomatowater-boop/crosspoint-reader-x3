@@ -24,6 +24,18 @@ Based on [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-rea
 
 新しい版で問題が出たときは、Releases から前の版の `firmware.bin` を取ってきて、同じ手順でSDカードから書き込めば戻せます。
 
+### SDカード更新で「USBで書き込んでください」と出たら
+
+1.4.6 以前のこのフォークを**USBで書き込んだことがある**X3は、フラッシュの区切り（パーティション）が「アプリ領域1つ」になっていて、SDカード更新もOTAもできません（1.4.6 以前ではSD更新の途中で落ちていました）。1.4.7 から区切りを「アプリ領域2つ」に戻したので、**一度だけUSBで全部書き込んで**ください。設定とキーボードのペアリング情報は消えません。
+
+Releases から `bootloader.bin` `partitions.bin` `boot_app0.bin` `firmware.bin` をダウンロードして、[esptool](https://docs.espressif.com/projects/esptool/)（`pip install esptool`）で書き込みます。`<ポート>` はmacなら `/dev/cu.usbmodem…`、Windowsなら `COM3` などです。
+
+```bash
+esptool.py --chip esp32c3 --port <ポート> --baud 921600 write_flash 0x0 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin
+```
+
+本家CrossPointからSDカード更新でこのフォークを入れた場合は、区切りが最初から2つなので、この作業は要りません。
+
 ---
 
 ## このフォークで追加したもの

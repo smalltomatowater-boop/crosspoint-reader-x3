@@ -24,6 +24,18 @@ From 1.4.0 on, "Check for updates" (OTA) in Settings fetches this fork's new rel
 
 If a new release causes problems, download an earlier release's `firmware.bin` from Releases and install it the same way to roll back.
 
+### If the SD card update says to flash over USB
+
+An X3 that was ever **flashed over USB with this fork at 1.4.6 or earlier** has a partition layout with a single app partition, so neither SD card nor OTA updates can work (up to 1.4.6 the SD update crashed partway). 1.4.7 goes back to two app partitions: **flash everything over USB once**. Settings and keyboard pairings are kept.
+
+Download `bootloader.bin`, `partitions.bin`, `boot_app0.bin` and `firmware.bin` from Releases and flash them with [esptool](https://docs.espressif.com/projects/esptool/) (`pip install esptool`). `<port>` is `/dev/cu.usbmodem…` on a Mac or `COM3` etc. on Windows.
+
+```bash
+esptool.py --chip esp32c3 --port <port> --baud 921600 write_flash 0x0 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin
+```
+
+If you installed this fork from upstream CrossPoint with an SD card update, the layout already has two app partitions and you don't need this.
+
 ---
 
 ## What this fork adds

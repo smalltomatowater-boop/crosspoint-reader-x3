@@ -9,4 +9,7 @@
 >
 > **1.3.0 以前では「アップデートを確認」(OTA)を使わないでください。** 本家のファームウェアで上書きされ、日本語UIとエディタが消えます。SDカードで更新してください。1.4.0 以降はOTAでこのフォークの版が届きます。
 
+> [!IMPORTANT]
+> **Flashed this fork over USB at 1.4.6 or earlier?** Your partition layout has one app slot and SD/OTA updates can't work. Flash once over USB with `bootloader.bin`, `partitions.bin`, `boot_app0.bin` and `firmware.bin` (see README). / **1.4.6以前をUSBで書き込んだX3は**、区切りがアプリ領域1つのためSD更新・OTAができません。一度USBで4つのファイルを書き込んでください（README参照）。
+
 To roll back, install an earlier release's `firmware.bin` the same way. / 前の版に戻すときは、前のリリースの `firmware.bin` を同じ手順で書き込んでください。
