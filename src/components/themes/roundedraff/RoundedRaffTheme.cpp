@@ -48,7 +48,6 @@ int coverWidth = 0;
 
 void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                                   const char* subtitle) const {
-  (void)subtitle;
   // Home screen header is custom-rendered in drawRecentBookCover.
   if (title == nullptr) {
     return;
@@ -76,6 +75,19 @@ void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const 
   const int maxTitleWidth = std::max(0, batteryGroupLeftX - 20 - titleX);
   auto headerTitle = renderer.truncatedText(kTitleFontId, title, maxTitleWidth, EpdFontFamily::BOLD);
   renderer.drawText(kTitleFontId, titleX, titleY, headerTitle.c_str(), true, EpdFontFamily::BOLD);
+
+  // Subtitle (e.g. the firmware version in Settings): right-aligned in the gap between title and battery.
+  if (subtitle != nullptr && subtitle[0] != '\0') {
+    const int titleRight = titleX + renderer.getTextWidth(kTitleFontId, headerTitle.c_str(), EpdFontFamily::BOLD) + 20;
+    const int maxSubtitleWidth = batteryGroupLeftX - 20 - titleRight;
+    if (maxSubtitleWidth > 0) {
+      auto headerSubtitle = renderer.truncatedText(kSubtitleFontId, subtitle, maxSubtitleWidth);
+      const int subtitleX = batteryGroupLeftX - 20 - renderer.getTextWidth(kSubtitleFontId, headerSubtitle.c_str());
+      const int subtitleY =
+          titleY + renderer.getLineHeight(kTitleFontId) - renderer.getLineHeight(kSubtitleFontId);  // share baseline
+      renderer.drawText(kSubtitleFontId, subtitleX, subtitleY, headerSubtitle.c_str(), true);
+    }
+  }
   drawBatteryRight(renderer,
                    Rect{batteryIconX, rect.y + 14, RoundedRaffMetrics::values.batteryWidth,
                         RoundedRaffMetrics::values.batteryHeight},
