@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -512,11 +513,17 @@ void LyraTheme::drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) c
 void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  // Shrink the rows when they don't all fit (e.g. 3-covers layout with 6+ items), so the last one stays on screen.
+  const int spacing = LyraMetrics::values.menuSpacing;
+  int rowHeight = LyraMetrics::values.menuRowHeight;
+  if (buttonCount > 0 && rect.height > 0) {
+    rowHeight = std::min(rowHeight, (rect.height + spacing) / buttonCount - spacing);
+    rowHeight = std::max(rowHeight, renderer.getLineHeight(UI_12_FONT_ID));
+  }
   for (int i = 0; i < buttonCount; ++i) {
     int tileWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
-    Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding,
-                         rect.y + i * (LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing), tileWidth,
-                         LyraMetrics::values.menuRowHeight};
+    Rect tileRect =
+        Rect{rect.x + LyraMetrics::values.contentSidePadding, rect.y + i * (rowHeight + spacing), tileWidth, rowHeight};
 
     const bool selected = selectedIndex == i;
 
@@ -528,7 +535,7 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     const char* label = labelStr.c_str();
     int textX = tileRect.x + 16;
     const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-    const int textY = tileRect.y + (LyraMetrics::values.menuRowHeight - lineHeight) / 2;
+    const int textY = tileRect.y + (rowHeight - lineHeight) / 2;
 
     if (rowIcon != nullptr) {
       UIIcon icon = rowIcon(i);
