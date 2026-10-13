@@ -1,4 +1,4 @@
-# CrossPoint Reader X3 (Japanese / Terminal fork)
+# CrossPoint Reader X3
 
 [日本語](README.md) | **English**
 
