@@ -86,7 +86,7 @@ class EditorActivity final : public Activity {
   RomajiKana romajiKana_;
 
   enum class InputMode { Hiragana, Katakana, Ascii };
-  InputMode inputMode_ = InputMode::Hiragana;
+  InputMode inputMode_ = InputMode::Ascii;  // start in AA; CapsLock cycles to あ/ア
   void cycleInputMode();
 
   uint32_t cursorPos_ = 0;  // byte offset into the logical document

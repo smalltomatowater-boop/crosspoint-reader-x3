@@ -37,8 +37,18 @@ void BleHidClient::enqueueKey(uint8_t usage, uint8_t mods) {
 }
 
 void BleHidClient::notifyCallback(NimBLERemoteCharacteristic* ch, uint8_t* data, size_t len, bool isNotify) {
-  (void)ch;
   (void)isNotify;
+#if defined(LOG_LEVEL) && LOG_LEVEL >= 2
+  // Every report as received (dev builds only): to tell a key the keyboard
+  // never sent from one sent in a layout we don't parse.
+  if (instance_ && instance_->ready_) {
+    char hex[3 * 12 + 1] = {};
+    for (size_t i = 0; i < len && i < 12; ++i) snprintf(hex + i * 3, 4, "%02x ", data[i]);
+    LOG_DBG("BLEH", "raw h=%u len=%u: %s", ch ? ch->getHandle() : 0, static_cast<unsigned>(len), hex);
+  }
+#else
+  (void)ch;
+#endif
   if (!instance_ || !instance_->ready_ || len < 7) return;
 
   // Layouts seen so far (TODO: parse the Report Map instead of by length):

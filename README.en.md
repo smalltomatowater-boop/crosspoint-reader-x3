@@ -73,7 +73,7 @@ If you installed this fork from upstream CrossPoint with an SD card update, the 
 
 | Key | Action |
 |---|---|
-| Caps Lock | Switch input mode: hiragana (あ) → katakana (ア) → direct/ASCII (AA) |
+| Caps Lock | Switch input mode: hiragana (あ) → katakana (ア) → direct/ASCII (AA). The editor opens in AA |
 | Tab | Four spaces |
 | Space | Convert / next candidate (while typing in hiragana mode) |
 | Shift+Space | Previous candidate |
@@ -100,7 +100,7 @@ Turn on Settings → "Controls" → "Editor Vi Mode" for vi-style modal editing.
 - Visual mode: `v` (characters), `V` (lines), `Ctrl-V` (block). Extend the selection with motions, then `d`/`x` delete, `y` yank, `c` change, `o` jump to the other end; Esc leaves. The arrow keys work too.
 - Block: columns are display cells (full-width characters are 2), and `j`/`k` move by logical line. `I`/`i` and `A`/`a` insert what you type on the first line into every line when you press Esc (Japanese works too). `p` pastes a yanked block as a column.
 - Into Insert mode: `i` `a` `I` `A` `o` `O`. Romaji-kana input and kanji conversion work as usual in Insert mode.
-- Esc: commits the kana being typed and goes to Normal mode (while a candidate is shown, it goes back to the reading first). Two Esc presses in a row switch to direct/ASCII input.
+- Esc: commits the kana being typed and goes to Normal mode (while a candidate is shown, it goes back to the reading first). Two Esc presses in a row switch to direct/ASCII input. `Ctrl+[` also works as Esc (for keyboards with a missing or flaky Esc key).
 - Commands:
   - `:w` saves; `:w name` saves under a new name.
   - `:e` opens the file browser. `:e name` opens that file, or starts a new document with that name if it doesn't exist. `:e! name` opens it and discards unsaved changes.

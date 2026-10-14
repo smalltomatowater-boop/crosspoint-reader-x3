@@ -40,6 +40,10 @@ constexpr uint8_t HID_ESCAPE = 0x29;
 constexpr uint8_t HID_BACKSPACE = 0x2A;
 constexpr uint8_t HID_TAB = 0x2B;
 constexpr uint8_t HID_CAPS_LOCK = 0x39;
+// The "[" key: 0x2F on US layouts, 0x30 on JIS (the key US calls "]"). Ctrl+[
+// is vi's Esc, for keyboards whose Esc key is missing or unreliable.
+constexpr uint8_t HID_LEFT_BRACKET_US = 0x2F;
+constexpr uint8_t HID_LEFT_BRACKET_JIS = 0x30;
 constexpr uint8_t HID_SPACE = 0x2C;
 constexpr uint8_t HID_DELETE = 0x4C;
 constexpr uint8_t HID_HOME = 0x4A;
@@ -559,6 +563,13 @@ void EditorActivity::redoLastChange() {
 }
 
 void EditorActivity::onBleKey(const HidKeyEvent& ev) {
+  if (hasCtrl(ev.mods) && (ev.usage == HID_LEFT_BRACKET_US || ev.usage == HID_LEFT_BRACKET_JIS)) {
+    HidKeyEvent esc = ev;
+    esc.usage = HID_ESCAPE;
+    esc.mods = 0;
+    onBleKey(esc);
+    return;
+  }
   if (lowMemNotice_) {
     lowMemNotice_ = false;  // shown until the next key
     frameDirty_ = true;
