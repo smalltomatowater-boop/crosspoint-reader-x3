@@ -22,11 +22,12 @@ comparison is about what sits at the centre, not feature counts. The
 README opens with this.
 
 **Releases / OTA (set up 2026-09-25):**
-- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.9; 1.4.1
+- Version is `[crosspoint] version` in `platformio.ini` (now 1.4.10; 1.4.1
   added the MS-IME romaji spellings, 1.4.2 the image viewer speed-up, 1.4.3
   the NimBLE memory trim, 1.4.4 7-byte reports + passkey pairing,
   1.4.5 the BLE client leak fix, 1.4.6 release-visible editor heap logs, 1.4.7 two OTA slots,
-  1.4.8 home menu rows kept on screen, 1.4.9 theme layout + SD font only in reader).
+  1.4.8 home menu rows kept on screen, 1.4.9 theme layout + SD font only in reader,
+  1.4.10 Ctrl+[ as Esc, AA input on open, RoundedRaff version).
   Release by bumping it, committing, then pushing a tag with **the same plain
   `X.Y.Z` name** (no `v`: `OtaUpdater` parses the tag with
   `sscanf("%d.%d.%d")`).
@@ -195,6 +196,18 @@ words, so `w` only stops at script changes). No typewriter scrolling.
    the hints (was fixed y=738 for the X4), Lyra lists fall back to 24px
    icons (no 32px text/image/file art) and center titles without subtitle,
    Recents shows the file name for empty/unrenderable titles.
+   **1.4.9 follow-up (reporter, 2026-10)**: KaboJP_Joyo (1 style, 10pt)
+   is resident 23,240 bytes; home went 82,000 -> 105,248 (rest of the gap
+   to our 110.5KB is Lyra Extended's cover snapshot), editor "Keyboard
+   ready" 2,584 -> 25,824. Reading has ~100KB free after the font loads, so
+   the two-level interval index is not needed.
+   **1.4.10 (2026-10-14): Esc "not working" in vi Insert.** Raw notify log
+   (dev builds: `raw h=<handle> len=<n>: <bytes>` for every report) showed
+   the owner's keyboard (channel 3, d7:73:d9:df:c7:00) sent no report for
+   Esc for 10+ s while Enter arrived on the same handle 53; the editor
+   handled every Esc that did arrive. Fix: Ctrl+[ (0x2F US / 0x30 JIS) maps
+   to Esc. The editor also opens in AA input (was hiragana). RoundedRaff
+   now draws the header subtitle (Settings version).
    **Fork vs upstream heap (2026-09-30)**: upstream at the fork point
    (f872f1f5, app-only flashed at 0x10000, our partition table) has 143,520
    free at home vs our 110,592, and total heap 228,088 vs 196,900. The
